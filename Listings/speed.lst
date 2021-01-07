@@ -1,10 +1,10 @@
-C51 COMPILER V9.57.0.0   SPEED                                                             11/30/2020 21:35:01 PAGE 1   
+C51 COMPILER V9.57.0.0   SPEED                                                             01/07/2021 18:03:35 PAGE 1   
 
 
 C51 COMPILER V9.57.0.0, COMPILATION OF MODULE SPEED
 OBJECT MODULE PLACED IN .\Objects\speed.obj
-COMPILER INVOKED BY: D:\keil_c51\C51\BIN\C51.EXE speed.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(.\DMP) DEBUG OBJECTEXTEND
-                    - PRINT(.\Listings\speed.lst) TABS(2) OBJECT(.\Objects\speed.obj)
+COMPILER INVOKED BY: D:\Keil_v5\C51\BIN\C51.EXE speed.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(.\DMP) DEBUG OBJECTEXTEND 
+                    -PRINT(.\Listings\speed.lst) TABS(2) OBJECT(.\Objects\speed.obj)
 
 line level    source
 
@@ -62,7 +62,7 @@ line level    source
   52          ////    if(P32==1)
   53          ////    {
   54          //      number[0]+=1;
-C51 COMPILER V9.57.0.0   SPEED                                                             11/30/2020 21:35:01 PAGE 2   
+C51 COMPILER V9.57.0.0   SPEED                                                             01/07/2021 18:03:35 PAGE 2   
 
   55          ////    }
   56          ////    else
@@ -126,7 +126,7 @@ line level    source
  113   1        return Velocity;
  114   1      }
  115          
-C51 COMPILER V9.57.0.0   SPEED                                                             11/30/2020 21:35:01 PAGE 3   
+C51 COMPILER V9.57.0.0   SPEED                                                             01/07/2021 18:03:35 PAGE 3   
 
  116          
 

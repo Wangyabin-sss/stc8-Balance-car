@@ -1,10 +1,10 @@
-C51 COMPILER V9.57.0.0   IIC                                                               11/30/2020 21:35:00 PAGE 1   
+C51 COMPILER V9.57.0.0   IIC                                                               01/07/2021 18:03:34 PAGE 1   
 
 
 C51 COMPILER V9.57.0.0, COMPILATION OF MODULE IIC
 OBJECT MODULE PLACED IN .\Objects\iic.obj
-COMPILER INVOKED BY: D:\keil_c51\C51\BIN\C51.EXE iic.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(.\DMP) DEBUG OBJECTEXTEND P
-                    -RINT(.\Listings\iic.lst) TABS(2) OBJECT(.\Objects\iic.obj)
+COMPILER INVOKED BY: D:\Keil_v5\C51\BIN\C51.EXE iic.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(.\DMP) DEBUG OBJECTEXTEND PR
+                    -INT(.\Listings\iic.lst) TABS(2) OBJECT(.\Objects\iic.obj)
 
 line level    source
 
@@ -62,7 +62,7 @@ line level    source
   52          //向I2C总线发送一个字节数据
   53          //*****************************************************************************************************
   54          void I2C_SendByte(u8 dat)
-C51 COMPILER V9.57.0.0   IIC                                                               11/30/2020 21:35:00 PAGE 2   
+C51 COMPILER V9.57.0.0   IIC                                                               01/07/2021 18:03:34 PAGE 2   
 
   55          {
   56   1          u8 i;

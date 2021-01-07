@@ -1,10 +1,10 @@
-C51 COMPILER V9.57.0.0   MAIN                                                              11/30/2020 21:35:00 PAGE 1   
+C51 COMPILER V9.57.0.0   MAIN                                                              01/07/2021 18:03:34 PAGE 1   
 
 
 C51 COMPILER V9.57.0.0, COMPILATION OF MODULE MAIN
 OBJECT MODULE PLACED IN .\Objects\main.obj
-COMPILER INVOKED BY: D:\keil_c51\C51\BIN\C51.EXE main.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(.\DMP) DEBUG OBJECTEXTEND 
-                    -PRINT(.\Listings\main.lst) TABS(2) OBJECT(.\Objects\main.obj)
+COMPILER INVOKED BY: D:\Keil_v5\C51\BIN\C51.EXE main.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(.\DMP) DEBUG OBJECTEXTEND P
+                    -RINT(.\Listings\main.lst) TABS(2) OBJECT(.\Objects\main.obj)
 
 line level    source
 
@@ -62,7 +62,7 @@ line level    source
   52   1      //  P2M1 = 0x00;
   53   1      //  P0M0 = 0xff;//设置 P0.0~P0.7 为推挽输出模式
   54   1      //  P0M1 = 0x00;
-C51 COMPILER V9.57.0.0   MAIN                                                              11/30/2020 21:35:00 PAGE 2   
+C51 COMPILER V9.57.0.0   MAIN                                                              01/07/2021 18:03:34 PAGE 2   
 
   55   1        
   56   1      //  OLED_Init();  //OLED初始化
