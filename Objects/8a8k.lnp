@@ -1,0 +1,13 @@
+".\Objects\STARTUP.obj",
+".\Objects\main.obj",
+".\Objects\delay.obj",
+".\Objects\uart.obj",
+".\Objects\MPU6050.obj",
+".\Objects\iic.obj",
+".\Objects\PID.obj",
+".\Objects\PWM.obj",
+".\Objects\GPIO.obj",
+".\Objects\OLED.obj",
+".\Objects\speed.obj" 
+TO ".\Objects\8a8k" 
+PRINT(".\Listings\8a8k.m51") RAMSIZE(256) 

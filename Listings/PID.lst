@@ -1,0 +1,159 @@
+C51 COMPILER V9.57.0.0   PID                                                               11/30/2020 21:35:00 PAGE 1   
+
+
+C51 COMPILER V9.57.0.0, COMPILATION OF MODULE PID
+OBJECT MODULE PLACED IN .\Objects\PID.obj
+COMPILER INVOKED BY: D:\keil_c51\C51\BIN\C51.EXE PID.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(.\DMP) DEBUG OBJECTEXTEND P
+                    -RINT(.\Listings\PID.lst) TABS(2) OBJECT(.\Objects\PID.obj)
+
+line level    source
+
+   1          #include "PID.h"
+   2          
+   3          bit motor_direction;
+   4          
+   5          //卡尔曼滤波参数与函数
+   6          
+   7          float dt=0.008;//注意：dt的取值为kalman滤波器采样时间
+   8          float angle, angle_dot;//角度和角速度
+   9          float PP[2][2] = {{ 1, 0 },{ 0, 1 }};
+  10          float Pdot[4] ={ 0,0,0,0};
+  11          float Q_angle=0.001, Q_gyro=0.005; //角度数据置信度,角速度数据置信度
+  12          float R_angle=0.5 ,C_0 = 1;
+  13          float q_bias, angle_err, PCt_0, PCt_1, E, K_0, K_1, t_0, t_1;
+  14          
+  15          //卡尔曼滤波
+  16          
+  17          float Kalman_Filter(float angle_m, float gyro_m)//angleAx 和 gyroGy
+  18          
+  19          {
+  20   1              angle+=(gyro_m-q_bias) * dt;
+  21   1              angle_err = angle_m - angle;
+  22   1              Pdot[0]=Q_angle - PP[0][1] - PP[1][0];
+  23   1              Pdot[1]=- PP[1][1];
+  24   1              Pdot[2]=- PP[1][1];
+  25   1              Pdot[3]=Q_gyro;
+  26   1              PP[0][0] += Pdot[0] * dt;
+  27   1              PP[0][1] += Pdot[1] * dt;
+  28   1              PP[1][0] += Pdot[2] * dt;
+  29   1              PP[1][1] += Pdot[3] * dt;
+  30   1              PCt_0 = C_0 * PP[0][0];
+  31   1              PCt_1 = C_0 * PP[1][0];
+  32   1              E = R_angle + C_0 * PCt_0;
+  33   1              K_0 = PCt_0 / E;
+  34   1              K_1 = PCt_1 / E;
+  35   1              t_0 = PCt_0;
+  36   1              t_1 = C_0 * PP[0][1];
+  37   1              PP[0][0] -= K_0 * t_0;
+  38   1              PP[0][1] -= K_0 * t_1;
+  39   1              PP[1][0] -= K_1 * t_0;
+  40   1              PP[1][1] -= K_1 * t_1;
+  41   1              angle += K_0 * angle_err; //最优角度
+  42   1              q_bias += K_1 * angle_err;
+  43   1              angle_dot = gyro_m-q_bias;//最优角速度
+  44   1              return angle;
+  45   1      }
+  46          
+  47          
+  48          float angle_average(float a_angle)
+  49          {
+  50   1        u8 i;
+  51   1        float angle,a[5];
+  52   1        
+  53   1        a[0]=a[1];
+  54   1        a[1]=a[2];
+C51 COMPILER V9.57.0.0   PID                                                               11/30/2020 21:35:00 PAGE 2   
+
+  55   1        a[2]=a[3];
+  56   1        a[3]=a[4];
+  57   1        a[4]=a_angle;
+  58   1        
+  59   1        angle=(a[0]+a[1]+a[2]+a[3]+a[4])/5;
+  60   1        return angle;
+  61   1      }
+*** WARNING C280 IN LINE 50 OF PID.c: 'i': unreferenced local variable
+  62          
+  63          void yijielvbo(float a_angle,float *angle,float g_speed)
+  64          {
+  65   1        float k=0.98;
+  66   1        *angle=(1-k)*a_angle+k*(*angle+g_speed*0.006);
+  67   1      }
+  68          
+  69          float A_angle(void) //加速度计计算角度
+  70          {
+  71   1        int Ax,Az;
+  72   1        float a,A_angle;
+  73   1        Ax=GetData(ACCEL_XOUT_H);
+  74   1        Az=GetData(ACCEL_ZOUT_H);
+  75   1        a=(float)Ax/Az;
+  76   1        A_angle=atan(a)*57.3;
+  77   1        return A_angle;
+  78   1      }
+  79          
+  80          float G_speed(void) //陀螺仪计算角度,传入时间间隔
+  81          {
+  82   1        int Gy;
+  83   1        float G_speed;
+  84   1        Gy=GetData(GYRO_YOUT_H);
+  85   1        G_speed=(float)Gy/16.4;
+  86   1        return G_speed;
+  87   1      }
+  88          
+  89          
+  90          int PID_PWM(float angle,float acc)//传入滤波后角度，陀螺仪角速度
+  91          {
+  92   1        int PWM;
+  93   1        PWM=P*angle+D*acc;
+  94   1        return PWM;
+  95   1      }
+  96          
+  97          void Motor_control(int pwm,float a_angle)
+  98          {
+  99   1        if(pwm>=0)
+ 100   1        {
+ 101   2          AIN1=0;
+ 102   2          AIN2=1;
+ 103   2          BIN1=1;
+ 104   2          BIN2=0;
+ 105   2          motor_direction=1;
+ 106   2        }
+ 107   1        if(pwm<0)
+ 108   1        {
+ 109   2          AIN1=1;
+ 110   2          AIN2=0;
+ 111   2          BIN1=0;
+ 112   2          BIN2=1;
+ 113   2          motor_direction=0;
+ 114   2        }
+ 115   1        
+C51 COMPILER V9.57.0.0   PID                                                               11/30/2020 21:35:00 PAGE 3   
+
+ 116   1        if(a_angle>=40||a_angle<=-40)
+ 117   1        {
+ 118   2          STBY=0;
+ 119   2        }
+ 120   1        else
+ 121   1        {
+ 122   2          STBY=1;
+ 123   2        }
+ 124   1      }
+ 125          
+ 126          
+ 127          
+ 128          
+ 129          
+ 130          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1938    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =     96      66
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      1    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  1 WARNING(S),  0 ERROR(S)

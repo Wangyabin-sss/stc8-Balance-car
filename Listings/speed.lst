@@ -1,0 +1,145 @@
+C51 COMPILER V9.57.0.0   SPEED                                                             11/30/2020 21:35:01 PAGE 1   
+
+
+C51 COMPILER V9.57.0.0, COMPILATION OF MODULE SPEED
+OBJECT MODULE PLACED IN .\Objects\speed.obj
+COMPILER INVOKED BY: D:\keil_c51\C51\BIN\C51.EXE speed.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(.\DMP) DEBUG OBJECTEXTEND
+                    - PRINT(.\Listings\speed.lst) TABS(2) OBJECT(.\Objects\speed.obj)
+
+line level    source
+
+   1          #include "speed.h"
+   2          
+   3          int number[2]={0,0};
+   4          
+   5          void INT_init()
+   6          {
+   7   1        IT0 = 0;//Ê¹ÄÜ INT0 ÉÏÉýÑØºÍÏÂ½µÑØÖÐ¶Ï
+   8   1        EX0 = 1;//Ê¹ÄÜ INT0 ÖÐ¶Ï
+   9   1        
+  10   1        IT1 = 0;//Ê¹ÄÜ INT1 ÉÏÉýÑØºÍÏÂ½µÑØÖÐ¶Ï
+  11   1        EX1 = 1;//Ê¹ÄÜ INT1 ÖÐ¶Ï
+  12   1        
+  13   1      //  INTCLKO = EX2;//Ê¹ÄÜ INT2 ÏÂ½µÑØÖÐ¶Ï
+  14   1      //  
+  15   1      //  INTCLKO |= EX3;//Ê¹ÄÜ INT3 ÏÂ½µÑØÖÐ¶Ï
+  16   1        
+  17   1        EA = 1;
+  18   1        
+  19   1      }
+  20          
+  21          
+  22          void INT0_Isr() interrupt 0  //INT0--P32µç»ú1-AÏà
+  23          {
+  24   1        
+  25   1          if(motor_direction==1)
+  26   1          {
+  27   2            number[0]+=1;
+  28   2          }
+  29   1          else
+  30   1          {
+  31   2            number[0]-=1;
+  32   2          }
+  33   1        
+  34   1      }
+  35          
+  36          void INT1_Isr() interrupt 2  //INT1--P33µç»ú2-AÏà
+  37          {
+  38   1      
+  39   1          if(motor_direction==1)
+  40   1          {
+  41   2            number[1]+=1;
+  42   2          }
+  43   1          else
+  44   1          {
+  45   2            number[1]-=1;
+  46   2          }
+  47   1          
+  48   1      }
+  49          
+  50          //void INT2_Isr() interrupt 10  //INT2--P36µç»ú1-BÏà
+  51          //{
+  52          ////    if(P32==1)
+  53          ////    {
+  54          //      number[0]+=1;
+C51 COMPILER V9.57.0.0   SPEED                                                             11/30/2020 21:35:01 PAGE 2   
+
+  55          ////    }
+  56          ////    else
+  57          ////    {
+  58          ////      number[0]-=1;
+  59          ////    }
+  60          ////    
+  61          //}
+  62          
+  63          //void INT3_Isr() interrupt 11  //INT3--P37µç»ú2-BÏà
+  64          //{
+  65          ////    if(P33==0)
+  66          ////    {
+  67          //      number[1]+=1;
+  68          ////    }
+  69          ////    else
+  70          ////    {
+  71          ////      number[1]-=1;
+  72          ////    }
+  73          ////    
+  74          //}
+  75          
+  76          int speed_pwm()
+  77          {
+  78   1        static float speed=0,position=0,spwm=0;
+  79   1        static float speed_r=0;
+  80   1        
+  81   1        speed_r =(float)(number[0] + number[1])*0.8;
+  82   1        number[0] = number[1] = 0;
+  83   1        speed *= 0.8;          //ÉÏÒ»´ÎµÄ     //³µÂÖËÙ¶ÈÂË²¨
+  84   1        speed += speed_r*0.4;
+  85   1        position += speed;               //»ý·ÖµÃµ½Î»ÒÆ
+  86   1        
+  87   1        if(position>3500)  position=3500;          //===»ý·ÖÏÞ·ù
+  88   1        if(position<-3500)  position=-3500;         //===»ý·ÖÏÞ·ù
+  89   1        
+  90   1        spwm = Is*position + Ps*speed;   //PID£ºËÙ¶ÈºÍÎ»ÖÃ
+  91   1        
+  92   1        return spwm;
+  93   1      
+  94   1        
+  95   1      }
+  96          
+  97          
+  98          int velocity(int Encoder_Left,int Encoder_Right)
+  99          {  
+ 100   1        static float Velocity,Encoder_Least,Encoder,Movement;
+ 101   1        static float Encoder_Integral;
+ 102   1        float kp=8,ki=0.04;
+ 103   1        //=============ËÙ¶ÈPI¿ØÖÆÆ÷=======================//  
+ 104   1        Encoder_Least =(Encoder_Left+Encoder_Right)-0;  //===»ñÈ¡×îÐÂËÙ¶ÈÆ«²î==²âÁ¿ËÙ¶È£¨×óÓÒ±àÂëÆ÷Ö®ºÍ£©-Ä¿±êËÙ¶
+             -È£¨´Ë´¦ÎªÁã£© 
+ 105   1        Encoder *= 0.7;                            //===Ò»½×µÍÍ¨ÂË²¨Æ÷       
+ 106   1        Encoder += Encoder_Least*0.3;              //===Ò»½×µÍÍ¨ÂË²¨Æ÷    
+ 107   1        Encoder_Integral +=Encoder;                                     //===»ý·Ö³öÎ»ÒÆ »ý·ÖÊ±¼ä£º10ms
+ 108   1        Encoder_Integral=Encoder_Integral-Movement;                     //===½ÓÊÕÒ£¿ØÆ÷Êý¾Ý£¬¿ØÖÆÇ°½øºóÍË
+ 109   1        if(Encoder_Integral>10000)    Encoder_Integral=10000;          //===»ý·ÖÏÞ·ù
+ 110   1        if(Encoder_Integral<-10000) Encoder_Integral=-10000;         //===»ý·ÖÏÞ·ù  
+ 111   1        Velocity=Encoder*kp+Encoder_Integral*ki; //===ËÙ¶È¿ØÖÆ  
+ 112   1      
+ 113   1        return Velocity;
+ 114   1      }
+ 115          
+C51 COMPILER V9.57.0.0   SPEED                                                             11/30/2020 21:35:01 PAGE 3   
+
+ 116          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    862    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =     40      10
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

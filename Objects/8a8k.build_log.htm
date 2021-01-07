@@ -1,0 +1,65 @@
+<html>
+<body>
+<pre>
+<h1>µVision Build Log</h1>
+<h2>Tool Versions:</h2>
+IDE-Version: ¦ÌVision V5.24.2.86
+Copyright (C) 2017 ARM Ltd and ARM Germany GmbH. All rights reserved.
+License Information: 1 2, 3, LIC=ICIVE-5V3L2-A6HQP-MQVF1-NT05F-Y03IV
+ 
+Tool Versions:
+Toolchain:       MDK51 Professional  Version: 9.57.0.0
+Toolchain Path:  D:\keil_c51\C51\BIN
+C Compiler:      C51.exe V9.57.0.0
+Assembler:       A51.exe V8.2.7.0
+Linker/Locator:  BL51.exe V6.22.2.0
+Library Manager: LIB51.exe V4.30.1.0
+Hex Converter:   OH51.exe V2.7.0.0
+CPU DLL:         S8051.DLL V3.113.0.0
+Dialog DLL:      DP51.DLL V2.64.0.0
+Target DLL:      STCMON51.DLL V1, 0, 11, 0
+Dialog DLL:      TP51.DLL V2.60.0.0
+ 
+<h2>Project:</h2>
+C:\Users\Home\Desktop\C51\8a8k.uvproj
+Project File Date:  11/04/2020
+
+<h2>Output:</h2>
+Rebuild target 'Target 1'
+assembling STARTUP.A51...
+compiling main.c...
+compiling delay.c...
+compiling uart.c...
+compiling MPU6050.c...
+compiling iic.c...
+compiling PID.c...
+PID.c(50): warning C280: 'i': unreferenced local variable
+compiling PWM.c...
+compiling GPIO.c...
+compiling OLED.c...
+OLED.c(107): warning C294: unreachable code
+compiling speed.c...
+linking...
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_UARTSENDSTR?UART
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_PUTCHAR?UART
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_ANGLE_AVERAGE?PID
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_YIJIELVBO?PID
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?TIMER_PWM_INIT?PWM
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_OLED_SHOWSTRING?OLED
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?OLED_INIT?OLED
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_VELOCITY?SPEED
+Program Size: data=9.3 xdata=246 code=10098
+creating hex file from ".\Objects\8a8k"...
+".\Objects\8a8k" - 0 Error(s), 10 Warning(s).
+Build Time Elapsed:  00:00:02
+</pre>
+</body>
+</html>

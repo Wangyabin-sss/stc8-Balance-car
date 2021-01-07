@@ -1,0 +1,129 @@
+C51 COMPILER V9.57.0.0   MAIN                                                              11/30/2020 21:35:00 PAGE 1   
+
+
+C51 COMPILER V9.57.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: D:\keil_c51\C51\BIN\C51.EXE main.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(.\DMP) DEBUG OBJECTEXTEND 
+                    -PRINT(.\Listings\main.lst) TABS(2) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include "uart.h"
+   2          #include "MPU6050.h"
+   3          #include "PID.h"
+   4          #include "GPIO.h"
+   5          #include "PWM.h"
+   6          #include "OLED.h"
+   7          #include "speed.h"
+   8          
+   9          /*------------已使用的硬件资源--避免重复使用-----------
+  10          
+  11          定时器0中断做PWM发生器
+  12          定时器1中断做OLED显示
+  13          定时器2做波特率发生器
+  14          外部中断P32、P33、P36、P37做编码器测速
+  15          
+  16          引脚：IIC--SCL=P00，SDA=P01
+  17                定时器PWM--P04 硬件PWM--P20与P21
+  18                电机控制引脚--AIN1 = P2^3;
+  19                              AIN2 = P2^1;
+  20                              BIN1 = P2^5;
+  21                              BIN2 = P2^6;
+  22                              STBY = P2^4;
+  23                              
+  24                OLED引脚--OLED_CS=P0^3; //片选
+  25                          OLED_RST =P0^5;//复位
+  26                          OLED_DC =P0^4;//数据/命令控制
+  27                          OLED_SCL=P0^7;//时钟 D0（SCLK)
+  28                          OLED_SDIN=P0^6;//D1（MOSI） 数据
+  29          */
+  30          
+  31          
+  32          void Systeminit(void)
+  33          {
+  34   1        P_SW2 = 0x80;
+  35   1        XOSCCR = 0xc0;      //启动外部晶振
+  36   1        while (!(XOSCCR & 1));//等待时钟稳定
+  37   1        CLKDIV = 0x00;      //时钟不分频
+  38   1        CKSEL = 0x01;     //选择外部晶振
+  39   1        P_SW2 = 0x00;
+  40   1      }
+  41          
+  42          
+  43          
+  44          void main()
+  45          {
+  46   1        int PWM=0;
+  47   1        float angle=0,a_angle=0,g_speed=0;
+  48   1      
+  49   1        Systeminit();  //使用外部晶振
+  50   1        delay_ms(10);
+  51   1      //  P2M0 = 0xff;//设置 P2.0~P2.7 为推挽输出模式
+  52   1      //  P2M1 = 0x00;
+  53   1      //  P0M0 = 0xff;//设置 P0.0~P0.7 为推挽输出模式
+  54   1      //  P0M1 = 0x00;
+C51 COMPILER V9.57.0.0   MAIN                                                              11/30/2020 21:35:00 PAGE 2   
+
+  55   1        
+  56   1      //  OLED_Init();  //OLED初始化
+  57   1        delay_ms(10);
+  58   1        InitMPU6050(); //mpu6050初始化
+  59   1        delay_ms(10);
+  60   1        Uart1_Init();  //串口初始化
+  61   1        delay_ms(10);
+  62   1      //  Timer_PWM_init();
+  63   1        PWM_init();   //硬件PWM初始化
+  64   1        delay_ms(10);
+  65   1        INT_init();
+  66   1        delay_ms(10);
+  67   1      
+  68   1        
+  69   1        while(1)
+  70   1        { P55=0;
+  71   2          
+  72   2          a_angle=-A_angle();
+  73   2          g_speed=G_speed();
+  74   2          angle=Kalman_Filter(a_angle,g_speed)-0.78;
+  75   2      //    angle=angle_average(a_angle);
+  76   2      //    yijielvbo(a_angle,&angle,g_speed);
+  77   2          
+  78   2      //    printf("%f—%f—%f\n",angle,a_angle,g_speed);
+  79   2          
+  80   2      //    PWM=PID_PWM(angle,g_speed);
+  81   2          PWM=PID_PWM(angle,g_speed)+speed_pwm();  //pid_pwm有正负 speed_pwm也要有正负
+  82   2      //    PWM=speed_pwm();
+  83   2      //    PWM=PID_PWM(angle,g_speed)+velocity(number[0],number[1]);
+  84   2      //    PWM=velocity(number[0],number[1]);
+  85   2          
+  86   2      //    occ=PWM;
+  87   2          val1=val0=PWM;
+  88   2          
+  89   2          Motor_control(PWM,angle);
+  90   2          
+  91   2          delay_ms(8);
+  92   2          
+  93   2        }
+  94   1        
+  95   1        
+  96   1      }
+  97          
+  98          
+  99          
+ 100          
+ 101          
+ 102          
+ 103          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    323    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----      14
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

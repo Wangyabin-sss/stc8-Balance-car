@@ -1,0 +1,3164 @@
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 1   
+
+
+C51 COMPILER V9.57.0.0, COMPILATION OF MODULE INV_MPU
+OBJECT MODULE PLACED IN .\Objects\inv_mpu.obj
+COMPILER INVOKED BY: D:\Keil_v5\C51\BIN\C51.EXE DMP\inv_mpu.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(.\DMP) DEBUG OBJECTE
+                    -XTEND PRINT(.\Listings\inv_mpu.lst) TABS(2) OBJECT(.\Objects\inv_mpu.obj)
+
+line level    source
+
+   1          /*
+   2           $License:
+   3              Copyright (C) 2011-2012 InvenSense Corporation, All Rights Reserved.
+   4              See included License.txt for License information.
+   5           $
+   6           */
+   7          /**
+   8           *  @addtogroup  DRIVERS Sensor Driver Layer
+   9           *  @brief       Hardware drivers to communicate with sensors via I2C.
+  10           *
+  11           *  @{
+  12           *      @file       inv_mpu.c
+  13           *      @brief      An I2C-based driver for Invensense gyroscopes.
+  14           *      @details    This driver currently works for the following devices:
+  15           *                  MPU6050
+  16           *                  MPU6500
+  17           *                  MPU9150 (or MPU6050 w/ AK8975 on the auxiliary bus)
+  18           *                  MPU9250 (or MPU6500 w/ AK8963 on the auxiliary bus)
+  19           */
+  20          #include <stdio.h>
+  21          #include <stdint.h>
+*** WARNING C318 IN LINE 21 OF DMP\inv_mpu.c: can't open file 'stdint.h'
+  22          #include <stdlib.h>
+  23          #include <string.h>
+  24          #include <math.h>
+  25          #include "inv_mpu.h"
+  26          #include "inv_mpu_dmp_motion_driver.h"
+  27          #include "MPU6050.h"
+  28          #include "delay.h"
+  29          #include "uart.h"
+  30          
+  31          
+  32          #define MPU6050             //定义我们使用的传感器为MPU6050
+  33          #define MOTION_DRIVER_TARGET_MSP430   //定义驱动部分,采用MSP430的驱动(移植到STM32F1)
+  34          
+  35          /* The following functions must be defined for this platform:
+  36           * i2c_write(unsigned char slave_addr, unsigned char reg_addr,
+  37           *      unsigned char length, unsigned char const *dat)
+  38           * i2c_read(unsigned char slave_addr, unsigned char reg_addr,
+  39           *      unsigned char length, unsigned char *dat)
+  40           * delay_ms(unsigned long num_ms)
+  41           * get_ms(unsigned long *count)
+  42           * reg_int_cb(void (*cb)(void), unsigned char port, unsigned char pin)
+  43           * labs(long x)
+  44           * fabsf(float x)
+  45           * min(int a, int b)
+  46           */
+  47          #if defined MOTION_DRIVER_TARGET_MSP430
+  48          //#include "msp430.h"
+  49          //#include "msp430_i2c.h"
+  50          //#include "msp430_clock.h"
+  51          //#include "msp430_interrupt.h"
+  52          
+  53          #define i2c_write   MPU_Write_Len
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 2   
+
+  54          #define i2c_read    MPU_Read_Len
+  55          #define delay_ms    delay_ms
+  56          #define get_ms      mget_ms
+  57          //static inline int reg_int_cb(struct int_param_s *int_param)
+  58          //{
+  59          //    return msp430_reg_int_cb(int_param->cb, int_param->pin, int_param->lp_exit,
+  60          //        int_param->active_low);
+  61          //}
+  62          #define log_i   printf  //打印信息
+  63          #define log_e   printf  //打印信息
+  64          /* labs is already defined by TI's toolchain. */
+  65          /* fabs is for doubles. fabsf is for floats. */
+  66          #define fabs        fabsf
+  67          #define min(a,b) ((a<b)?a:b)
+  68          #elif defined EMPL_TARGET_MSP430
+              #include "msp430.h"
+              #include "msp430_i2c.h"
+              #include "msp430_clock.h"
+              #include "msp430_interrupt.h"
+              #include "log.h"
+              #define i2c_write   msp430_i2c_write
+              #define i2c_read    msp430_i2c_read
+              #define delay_ms    msp430_delay_ms
+              #define get_ms      msp430_get_clock_ms
+              static inline int reg_int_cb(struct int_param_s *int_param)
+              {
+                  return msp430_reg_int_cb(int_param->cb, int_param->pin, int_param->lp_exit,
+                      int_param->active_low);
+              }
+              #define log_i       MPL_LOGI
+              #define log_e       MPL_LOGE
+              /* labs is already defined by TI's toolchain. */
+              /* fabs is for doubles. fabsf is for floats. */
+              #define fabs        fabsf
+              #define min(a,b) ((a<b)?a:b)
+              #elif defined EMPL_TARGET_UC3L0
+              /* Instead of using the standard TWI driver from the ASF library, we're using
+               * a TWI driver that follows the slave address + register address convention.
+               */
+              #include "twi.h"
+              #include "delay.h"
+              #include "sysclk.h"
+              #include "log.h"
+              #include "sensors_xplained.h"
+              #include "uc3l0_clock.h"
+              #define i2c_write(a, b, c, d)   twi_write(a, b, d, c)
+              #define i2c_read(a, b, c, d)    twi_read(a, b, d, c)
+              /* delay_ms is a function already defined in ASF. */
+              #define get_ms  uc3l0_get_clock_ms
+              static inline int reg_int_cb(struct int_param_s *int_param)
+              {
+                  sensor_board_irq_connect(int_param->pin, int_param->cb, int_param->arg);
+                  return 0;
+              }
+              #define log_i       MPL_LOGI
+              #define log_e       MPL_LOGE
+              /* UC3 is a 32-bit processor, so abs and labs are equivalent. */
+              #define labs        abs
+              #define fabs(x)     (((x)>0)?(x):-(x))
+              #else
+              #error  Gyro driver is missing the system layer implementations.
+              #endif
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 3   
+
+ 116          
+ 117          #if !defined MPU6050 && !defined MPU9150 && !defined MPU6500 && !defined MPU9250
+              #error  Which gyro are you using? Define MPUxxxx in your compiler options.
+              #endif
+ 120          
+ 121          /* Time for some messy macro work. =]
+ 122           * #define MPU9150
+ 123           * is equivalent to..
+ 124           * #define MPU6050
+ 125           * #define AK8975_SECONDARY
+ 126           *
+ 127           * #define MPU9250
+ 128           * is equivalent to..
+ 129           * #define MPU6500
+ 130           * #define AK8963_SECONDARY
+ 131           */
+ 132          #if defined MPU9150
+              #ifndef MPU6050
+              #define MPU6050
+              #endif                          /* #ifndef MPU6050 */
+              #if defined AK8963_SECONDARY
+              #error "MPU9150 and AK8963_SECONDARY cannot both be defined."
+              #elif !defined AK8975_SECONDARY /* #if defined AK8963_SECONDARY */
+              #define AK8975_SECONDARY
+              #endif                          /* #if defined AK8963_SECONDARY */
+              #elif defined MPU9250           /* #if defined MPU9150 */
+              #ifndef MPU6500
+              #define MPU6500
+              #endif                          /* #ifndef MPU6500 */
+              #if defined AK8975_SECONDARY
+              #error "MPU9250 and AK8975_SECONDARY cannot both be defined."
+              #elif !defined AK8963_SECONDARY /* #if defined AK8975_SECONDARY */
+              #define AK8963_SECONDARY
+              #endif                          /* #if defined AK8975_SECONDARY */
+              #endif                          /* #if defined MPU9150 */
+ 151          
+ 152          #if defined AK8975_SECONDARY || defined AK8963_SECONDARY
+              #define AK89xx_SECONDARY
+              #else
+ 155          /* #warning "No compass = less profit for Invensense. Lame." */
+ 156          #endif
+ 157          
+ 158          static int set_int_enable(unsigned char enable);
+ 159          
+ 160          /* Hardware registers needed by driver. */
+ 161          struct gyro_reg_s {
+ 162              unsigned char who_am_i;
+ 163              unsigned char rate_div;
+ 164              unsigned char lpf;
+ 165              unsigned char prod_id;
+ 166              unsigned char user_ctrl;
+ 167              unsigned char fifo_en;
+ 168              unsigned char gyro_cfg;
+ 169              unsigned char accel_cfg;
+ 170          //    unsigned char accel_cfg2;
+ 171          //    unsigned char lp_accel_odr;
+ 172              unsigned char motion_thr;
+ 173              unsigned char motion_dur;
+ 174              unsigned char fifo_count_h;
+ 175              unsigned char fifo_r_w;
+ 176              unsigned char raw_gyro;
+ 177              unsigned char raw_accel;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 4   
+
+ 178              unsigned char temp;
+ 179              unsigned char int_enable;
+ 180              unsigned char dmp_int_status;
+ 181              unsigned char int_status;
+ 182          //    unsigned char accel_intel;
+ 183              unsigned char pwr_mgmt_1;
+ 184              unsigned char pwr_mgmt_2;
+ 185              unsigned char int_pin_cfg;
+ 186              unsigned char mem_r_w;
+ 187              unsigned char accel_offs;
+ 188              unsigned char i2c_mst;
+ 189              unsigned char bank_sel;
+ 190              unsigned char mem_start_addr;
+ 191              unsigned char prgm_start_h;
+ 192          #if defined AK89xx_SECONDARY
+                  unsigned char s0_addr;
+                  unsigned char s0_reg;
+                  unsigned char s0_ctrl;
+                  unsigned char s1_addr;
+                  unsigned char s1_reg;
+                  unsigned char s1_ctrl;
+                  unsigned char s4_ctrl;
+                  unsigned char s0_do;
+                  unsigned char s1_do;
+                  unsigned char i2c_delay_ctrl;
+                  unsigned char raw_compass;
+                  /* The I2C_MST_VDDIO bit is in this register. */
+                  unsigned char yg_offs_tc;
+              #endif
+ 207          };
+ 208          
+ 209          /* Information specific to a particular device. */
+ 210          struct hw_s {
+ 211              unsigned char addr;
+ 212              unsigned short max_fifo;
+ 213              unsigned char num_reg;
+ 214              unsigned short temp_sens;
+ 215              short temp_offset;
+ 216              unsigned short bank_size;
+ 217          #if defined AK89xx_SECONDARY
+                  unsigned short compass_fsr;
+              #endif
+ 220          };
+ 221          
+ 222          /* When entering motion interrupt mode, the driver keeps track of the
+ 223           * previous state so that it can be restored at a later time.
+ 224           * TODO: This is tacky. Fix it.
+ 225           */
+ 226          struct motion_int_cache_s {
+ 227              unsigned short gyro_fsr;
+ 228              unsigned char accel_fsr;
+ 229              unsigned short lpf;
+ 230              unsigned short sample_rate;
+ 231              unsigned char sensors_on;
+ 232              unsigned char fifo_sensors;
+ 233              unsigned char dmp_on;
+ 234          };
+ 235          
+ 236          /* Cached chip configuration dat.
+ 237           * TODO: A lot of these can be handled with a bitmask.
+ 238           */
+ 239          struct chip_cfg_s {
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 5   
+
+ 240              /* Matches gyro_cfg >> 3 & 0x03 */
+ 241              unsigned char gyro_fsr;
+ 242              /* Matches accel_cfg >> 3 & 0x03 */
+ 243              unsigned char accel_fsr;
+ 244              /* Enabled sensors. Uses same masks as fifo_en, NOT pwr_mgmt_2. */
+ 245              unsigned char sensors;
+ 246              /* Matches config register. */
+ 247              unsigned char lpf;
+ 248              unsigned char clk_src;
+ 249              /* Sample rate, NOT rate divider. */
+ 250              unsigned short sample_rate;
+ 251              /* Matches fifo_en register. */
+ 252              unsigned char fifo_enable;
+ 253              /* Matches int enable register. */
+ 254              unsigned char int_enable;
+ 255              /* 1 if devices on auxiliary I2C bus appear on the primary. */
+ 256              unsigned char bypass_mode;
+ 257              /* 1 if half-sensitivity.
+ 258               * NOTE: This doesn't belong here, but everything else in hw_s is const,
+ 259               * and this allows us to save some precious RAM.
+ 260               */
+ 261              unsigned char accel_half;
+ 262              /* 1 if device in low-power accel-only mode. */
+ 263              unsigned char lp_accel_mode;
+ 264              /* 1 if interrupts are only triggered on motion events. */
+ 265              unsigned char int_motion_only;
+ 266              struct motion_int_cache_s cache;
+ 267              /* 1 for active low interrupts. */
+ 268              unsigned char active_low_int;
+ 269              /* 1 for latched interrupts. */
+ 270              unsigned char latched_int;
+ 271              /* 1 if DMP is enabled. */
+ 272              unsigned char dmp_on;
+ 273              /* Ensures that DMP will only be loaded once. */
+ 274              unsigned char dmp_loaded;
+ 275              /* Sampling rate used when DMP is enabled. */
+ 276              unsigned short dmp_sample_rate;
+ 277          #ifdef AK89xx_SECONDARY
+                  /* Compass sample rate. */
+                  unsigned short compass_sample_rate;
+                  unsigned char compass_addr;
+                  short mag_sens_adj[3];
+              #endif
+ 283          };
+ 284          
+ 285          /* Information for self-test. */
+ 286          struct test_s {
+ 287              unsigned long gyro_sens;
+ 288              unsigned long accel_sens;
+ 289              unsigned char reg_rate_div;
+ 290              unsigned char reg_lpf;
+ 291              unsigned char reg_gyro_fsr;
+ 292              unsigned char reg_accel_fsr;
+ 293              unsigned short wait_ms;
+ 294              unsigned char packet_thresh;
+ 295              float min_dps;
+ 296              float max_dps;
+ 297              float max_gyro_var;
+ 298              float min_g;
+ 299              float max_g;
+ 300              float max_accel_var;
+ 301          };
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 6   
+
+ 302          
+ 303          /* Gyro driver state variables. */
+ 304          struct gyro_state_s {
+ 305              const struct gyro_reg_s *reg;
+ 306              const struct hw_s *hw;
+ 307              struct chip_cfg_s chip_cfg;
+ 308              const struct test_s *test;
+ 309          };
+ 310          
+ 311          /* Filter configurations. */
+ 312          enum lpf_e {
+ 313              INV_FILTER_256HZ_NOLPF2 = 0,
+ 314              INV_FILTER_188HZ,
+ 315              INV_FILTER_98HZ,
+ 316              INV_FILTER_42HZ,
+ 317              INV_FILTER_20HZ,
+ 318              INV_FILTER_10HZ,
+ 319              INV_FILTER_5HZ,
+ 320              INV_FILTER_2100HZ_NOLPF,
+ 321              NUM_FILTER
+ 322          };
+ 323          
+ 324          /* Full scale ranges. */
+ 325          enum gyro_fsr_e {
+ 326              INV_FSR_250DPS = 0,
+ 327              INV_FSR_500DPS,
+ 328              INV_FSR_1000DPS,
+ 329              INV_FSR_2000DPS,
+ 330              NUM_GYRO_FSR
+ 331          };
+ 332          
+ 333          /* Full scale ranges. */
+ 334          enum accel_fsr_e {
+ 335              INV_FSR_2G = 0,
+ 336              INV_FSR_4G,
+ 337              INV_FSR_8G,
+ 338              INV_FSR_16G,
+ 339              NUM_ACCEL_FSR
+ 340          };
+ 341          
+ 342          /* Clock sources. */
+ 343          enum clock_sel_e {
+ 344              INV_CLK_INTERNAL = 0,
+ 345              INV_CLK_PLL,
+ 346              NUM_CLK
+ 347          };
+ 348          
+ 349          /* Low-power accel wakeup rates. */
+ 350          enum lp_accel_rate_e {
+ 351          #if defined MPU6050
+ 352              INV_LPA_1_25HZ,
+ 353              INV_LPA_5HZ,
+ 354              INV_LPA_20HZ,
+ 355              INV_LPA_40HZ
+ 356          #elif defined MPU6500
+                  INV_LPA_0_3125HZ,
+                  INV_LPA_0_625HZ,
+                  INV_LPA_1_25HZ,
+                  INV_LPA_2_5HZ,
+                  INV_LPA_5HZ,
+                  INV_LPA_10HZ,
+                  INV_LPA_20HZ,
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 7   
+
+                  INV_LPA_40HZ,
+                  INV_LPA_80HZ,
+                  INV_LPA_160HZ,
+                  INV_LPA_320HZ,
+                  INV_LPA_640HZ
+              #endif
+ 370          };
+ 371          
+ 372          #define BIT_I2C_MST_VDDIO   (0x80)
+ 373          #define BIT_FIFO_EN         (0x40)
+ 374          #define BIT_DMP_EN          (0x80)
+ 375          #define BIT_FIFO_RST        (0x04)
+ 376          #define BIT_DMP_RST         (0x08)
+ 377          #define BIT_FIFO_OVERFLOW   (0x10)
+ 378          #define BIT_dat_RDY_EN     (0x01)
+ 379          #define BIT_DMP_INT_EN      (0x02)
+ 380          #define BIT_MOT_INT_EN      (0x40)
+ 381          #define BITS_FSR            (0x18)
+ 382          #define BITS_LPF            (0x07)
+ 383          #define BITS_HPF            (0x07)
+ 384          #define BITS_CLK            (0x07)
+ 385          #define BIT_FIFO_SIZE_1024  (0x40)
+ 386          #define BIT_FIFO_SIZE_2048  (0x80)
+ 387          #define BIT_FIFO_SIZE_4096  (0xC0)
+ 388          #define BIT_RESET           (0x80)
+ 389          #define BIT_SLEEP           (0x40)
+ 390          #define BIT_S0_DELAY_EN     (0x01)
+ 391          #define BIT_S2_DELAY_EN     (0x04)
+ 392          #define BITS_SLAVE_LENGTH   (0x0F)
+ 393          #define BIT_SLAVE_BYTE_SW   (0x40)
+ 394          #define BIT_SLAVE_GROUP     (0x10)
+ 395          #define BIT_SLAVE_EN        (0x80)
+ 396          #define BIT_I2C_READ        (0x80)
+ 397          #define BITS_I2C_MASTER_DLY (0x1F)
+ 398          #define BIT_AUX_IF_EN       (0x20)
+ 399          #define BIT_ACTL            (0x80)
+ 400          #define BIT_LATCH_EN        (0x20)
+ 401          #define BIT_ANY_RD_CLR      (0x10)
+ 402          #define BIT_BYPASS_EN       (0x02)
+ 403          #define BITS_WOM_EN         (0xC0)
+ 404          #define BIT_LPA_CYCLE       (0x20)
+ 405          #define BIT_STBY_XA         (0x20)
+ 406          #define BIT_STBY_YA         (0x10)
+ 407          #define BIT_STBY_ZA         (0x08)
+ 408          #define BIT_STBY_XG         (0x04)
+ 409          #define BIT_STBY_YG         (0x02)
+ 410          #define BIT_STBY_ZG         (0x01)
+ 411          #define BIT_STBY_XYZA       (BIT_STBY_XA | BIT_STBY_YA | BIT_STBY_ZA)
+ 412          #define BIT_STBY_XYZG       (BIT_STBY_XG | BIT_STBY_YG | BIT_STBY_ZG)
+ 413          
+ 414          #if defined AK8975_SECONDARY
+              #define SUPPORTS_AK89xx_HIGH_SENS   (0x00)
+              #define AK89xx_FSR                  (9830)
+              #elif defined AK8963_SECONDARY
+              #define SUPPORTS_AK89xx_HIGH_SENS   (0x10)
+              #define AK89xx_FSR                  (4915)
+              #endif
+ 421          
+ 422          #ifdef AK89xx_SECONDARY
+              #define AKM_REG_WHOAMI      (0x00)
+              
+              #define AKM_REG_ST1         (0x02)
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 8   
+
+              #define AKM_REG_HXL         (0x03)
+              #define AKM_REG_ST2         (0x09)
+              
+              #define AKM_REG_CNTL        (0x0A)
+              #define AKM_REG_ASTC        (0x0C)
+              #define AKM_REG_ASAX        (0x10)
+              #define AKM_REG_ASAY        (0x11)
+              #define AKM_REG_ASAZ        (0x12)
+              
+              #define AKM_dat_READY      (0x01)
+              #define AKM_dat_OVERRUN    (0x02)
+              #define AKM_OVERFLOW        (0x80)
+              #define AKM_dat_ERROR      (0x40)
+              
+              #define AKM_BIT_SELF_TEST   (0x40)
+              
+              #define AKM_POWER_DOWN          (0x00 | SUPPORTS_AK89xx_HIGH_SENS)
+              #define AKM_SINGLE_MEASUREMENT  (0x01 | SUPPORTS_AK89xx_HIGH_SENS)
+              #define AKM_FUSE_ROM_ACCESS     (0x0F | SUPPORTS_AK89xx_HIGH_SENS)
+              #define AKM_MODE_SELF_TEST      (0x08 | SUPPORTS_AK89xx_HIGH_SENS)
+              
+              #define AKM_WHOAMI      (0x48)
+              #endif
+ 449          
+ 450          #if defined MPU6050
+ 451          //const struct gyro_reg_s reg = {
+ 452          //    .who_am_i       = 0x75,
+ 453          //    .rate_div       = 0x19,
+ 454          //    .lpf            = 0x1A,
+ 455          //    .prod_id        = 0x0C,
+ 456          //    .user_ctrl      = 0x6A,
+ 457          //    .fifo_en        = 0x23,
+ 458          //    .gyro_cfg       = 0x1B,
+ 459          //    .accel_cfg      = 0x1C,
+ 460          //    .motion_thr     = 0x1F,
+ 461          //    .motion_dur     = 0x20,
+ 462          //    .fifo_count_h   = 0x72,
+ 463          //    .fifo_r_w       = 0x74,
+ 464          //    .raw_gyro       = 0x43,
+ 465          //    .raw_accel      = 0x3B,
+ 466          //    .temp           = 0x41,
+ 467          //    .int_enable     = 0x38,
+ 468          //    .dmp_int_status = 0x39,
+ 469          //    .int_status     = 0x3A,
+ 470          //    .pwr_mgmt_1     = 0x6B,
+ 471          //    .pwr_mgmt_2     = 0x6C,
+ 472          //    .int_pin_cfg    = 0x37,
+ 473          //    .mem_r_w        = 0x6F,
+ 474          //    .accel_offs     = 0x06,
+ 475          //    .i2c_mst        = 0x24,
+ 476          //    .bank_sel       = 0x6D,
+ 477          //    .mem_start_addr = 0x6E,
+ 478          //    .prgm_start_h   = 0x70
+ 479          //#ifdef AK89xx_SECONDARY
+ 480          //    ,.raw_compass   = 0x49,
+ 481          //    .yg_offs_tc     = 0x01,
+ 482          //    .s0_addr        = 0x25,
+ 483          //    .s0_reg         = 0x26,
+ 484          //    .s0_ctrl        = 0x27,
+ 485          //    .s1_addr        = 0x28,
+ 486          //    .s1_reg         = 0x29,
+ 487          //    .s1_ctrl        = 0x2A,
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 9   
+
+ 488          //    .s4_ctrl        = 0x34,
+ 489          //    .s0_do          = 0x63,
+ 490          //    .s1_do          = 0x64,
+ 491          //    .i2c_delay_ctrl = 0x67
+ 492          //#endif
+ 493          //};
+ 494          const struct gyro_reg_s reg = {
+ 495          0x75,  //who_am_i
+ 496          0x19,  //rate_div
+ 497          0x1A,  //lpf
+ 498          0x0C,  //prod_id
+ 499          0x6A,  //user_ctrl
+ 500          0x23,  //fifo_en
+ 501          0x1B,  //gyro_cfg
+ 502          0x1C,  //accel_cfg
+ 503          0x1F,  // motion_thr
+ 504          0x20,  // motion_dur
+ 505          0x72,  // fifo_count_h
+ 506          0x74,  // fifo_r_w
+ 507          0x43,  // raw_gyro
+ 508          0x3B,  // raw_accel
+ 509          0x41,  // temp
+ 510          0x38,  // int_enable
+ 511          0x39,  //  dmp_int_status
+ 512          0x3A,  //  int_status
+ 513          0x6B,  // pwr_mgmt_1
+ 514          0x6C,  // pwr_mgmt_2
+ 515          0x37,  // int_pin_cfg
+ 516          0x6F,  // mem_r_w
+ 517          0x06,  // accel_offs
+ 518          0x24,  // i2c_mst
+ 519          0x6D,  // bank_sel
+ 520          0x6E,  // mem_start_addr
+ 521          0x70   // prgm_start_h
+ 522          };
+ 523          
+ 524          //const struct hw_s hw = {
+ 525          //    .addr           = 0x68,
+ 526          //    .max_fifo       = 1024,
+ 527          //    .num_reg        = 118,
+ 528          //    .temp_sens      = 340,
+ 529          //    .temp_offset    = -521,
+ 530          //    .bank_size      = 256
+ 531          //#if defined AK89xx_SECONDARY
+ 532          //    ,.compass_fsr    = AK89xx_FSR
+ 533          //#endif
+ 534          //};
+ 535          const struct hw_s hw={
+ 536            0x68,  //addr
+ 537            1024,  //max_fifo
+ 538            118,   //num_reg
+ 539            340,   //temp_sens
+ 540            -521,  //temp_offset
+ 541            256  //bank_size
+ 542          };
+ 543          
+ 544          //const struct test_s test = {
+ 545          //    .gyro_sens      = 32768/250,
+ 546          //    .accel_sens     = 32768/16,
+ 547          //    .reg_rate_div   = 0,    /* 1kHz. */
+ 548          //    .reg_lpf        = 1,    /* 188Hz. */
+ 549          //    .reg_gyro_fsr   = 0,    /* 250dps. */
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 10  
+
+ 550          //    .reg_accel_fsr  = 0x18, /* 16g. */
+ 551          //    .wait_ms        = 50,
+ 552          //    .packet_thresh  = 5,    /* 5% */
+ 553          //    .min_dps        = 10.f,
+ 554          //    .max_dps        = 105.f,
+ 555          //    .max_gyro_var   = 0.14f,
+ 556          //    .min_g          = 0.3f,
+ 557          //    .max_g          = 0.95f,
+ 558          //    .max_accel_var  = 0.14f
+ 559          //};
+ 560          const struct test_s test={
+ 561          32768/250,     //gyro_sens
+ 562          32768/16,    // accel_sens
+ 563          0,         // reg_rate_div
+ 564          1,        //  reg_lpf
+ 565          0,         // reg_gyro_fsr
+ 566          0x18,     //  reg_accel_fsr
+ 567          50,       //  wait_ms
+ 568          5,        //  packet_thresh
+ 569          10.0f,       // min_dps
+ 570          105.0f,      // max_dps
+ 571          0.14f,      //  max_gyro_var
+ 572          0.3f,      // min_g
+ 573          0.95f,       // max_g
+ 574          0.14f      // max_accel_var
+ 575          };
+ 576          
+ 577          //static struct gyro_state_s st = {
+ 578          //    .reg = &reg,
+ 579          //    .hw = &hw,
+ 580          //    .test = &test
+ 581          //};
+ 582          static struct gyro_state_s st={
+ 583            &reg,
+ 584            &hw,
+ 585            {0},
+ 586            &test
+ 587          };
+ 588          
+ 589          
+ 590          #elif defined MPU6500
+              const struct gyro_reg_s reg = {
+                  .who_am_i       = 0x75,
+                  .rate_div       = 0x19,
+                  .lpf            = 0x1A,
+                  .prod_id        = 0x0C,
+                  .user_ctrl      = 0x6A,
+                  .fifo_en        = 0x23,
+                  .gyro_cfg       = 0x1B,
+                  .accel_cfg      = 0x1C,
+                  .accel_cfg2     = 0x1D,
+                  .lp_accel_odr   = 0x1E,
+                  .motion_thr     = 0x1F,
+                  .motion_dur     = 0x20,
+                  .fifo_count_h   = 0x72,
+                  .fifo_r_w       = 0x74,
+                  .raw_gyro       = 0x43,
+                  .raw_accel      = 0x3B,
+                  .temp           = 0x41,
+                  .int_enable     = 0x38,
+                  .dmp_int_status = 0x39,
+                  .int_status     = 0x3A,
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 11  
+
+                  .accel_intel    = 0x69,
+                  .pwr_mgmt_1     = 0x6B,
+                  .pwr_mgmt_2     = 0x6C,
+                  .int_pin_cfg    = 0x37,
+                  .mem_r_w        = 0x6F,
+                  .accel_offs     = 0x77,
+                  .i2c_mst        = 0x24,
+                  .bank_sel       = 0x6D,
+                  .mem_start_addr = 0x6E,
+                  .prgm_start_h   = 0x70
+              #ifdef AK89xx_SECONDARY
+                  ,.raw_compass   = 0x49,
+                  .s0_addr        = 0x25,
+                  .s0_reg         = 0x26,
+                  .s0_ctrl        = 0x27,
+                  .s1_addr        = 0x28,
+                  .s1_reg         = 0x29,
+                  .s1_ctrl        = 0x2A,
+                  .s4_ctrl        = 0x34,
+                  .s0_do          = 0x63,
+                  .s1_do          = 0x64,
+                  .i2c_delay_ctrl = 0x67
+              #endif
+              };
+              const struct hw_s hw = {
+                  .addr           = 0x68,
+                  .max_fifo       = 1024,
+                  .num_reg        = 128,
+                  .temp_sens      = 321,
+                  .temp_offset    = 0,
+                  .bank_size      = 256
+              #if defined AK89xx_SECONDARY
+                  ,.compass_fsr    = AK89xx_FSR
+              #endif
+              };
+              
+              const struct test_s test = {
+                  .gyro_sens      = 32768/250,
+                  .accel_sens     = 32768/16,
+                  .reg_rate_div   = 0,    /* 1kHz. */
+                  .reg_lpf        = 1,    /* 188Hz. */
+                  .reg_gyro_fsr   = 0,    /* 250dps. */
+                  .reg_accel_fsr  = 0x18, /* 16g. */
+                  .wait_ms        = 50,
+                  .packet_thresh  = 5,    /* 5% */
+                  .min_dps        = 10.f,
+                  .max_dps        = 105.f,
+                  .max_gyro_var   = 0.14f,
+                  .min_g          = 0.3f,
+                  .max_g          = 0.95f,
+                  .max_accel_var  = 0.14f
+              };
+              
+              static struct gyro_state_s st = {
+                  .reg = &reg,
+                  .hw = &hw,
+                  .test = &test
+              };
+              #endif
+ 671          
+ 672          #define MAX_PACKET_LENGTH (12)
+ 673          
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 12  
+
+ 674          #ifdef AK89xx_SECONDARY
+              static int setup_compass(void);
+              #define MAX_COMPASS_SAMPLE_RATE (100)
+              #endif
+ 678          
+ 679          /**
+ 680           *  @brief      Enable/disable dat ready interrupt.
+ 681           *  If the DMP is on, the DMP interrupt is enabled. Otherwise, the dat ready
+ 682           *  interrupt is used.
+ 683           *  @param[in]  enable      1 to enable interrupt.
+ 684           *  @return     0 if successful.
+ 685           */
+ 686          static int set_int_enable(unsigned char enable)
+ 687          {
+ 688   1          unsigned char tmp;
+ 689   1      
+ 690   1          if (st.chip_cfg.dmp_on) {
+ 691   2              if (enable)
+ 692   2                  tmp = BIT_DMP_INT_EN;
+ 693   2              else
+ 694   2                  tmp = 0x00;
+ 695   2              if (i2c_write(st.hw->addr, st.reg->int_enable, 1, &tmp))
+ 696   2                  return -1;
+ 697   2              st.chip_cfg.int_enable = tmp;
+ 698   2          } else {
+ 699   2              if (!st.chip_cfg.sensors)
+ 700   2                  return -1;
+ 701   2              if (enable && st.chip_cfg.int_enable)
+ 702   2                  return 0;
+ 703   2              if (enable)
+ 704   2                  tmp = BIT_dat_RDY_EN;
+ 705   2              else
+ 706   2                  tmp = 0x00;
+ 707   2              if (i2c_write(st.hw->addr, st.reg->int_enable, 1, &tmp))
+ 708   2                  return -1;
+ 709   2              st.chip_cfg.int_enable = tmp;
+ 710   2          }
+ 711   1          return 0;
+ 712   1      }
+ 713          
+ 714          /**
+ 715           *  @brief      Register dump for testing.
+ 716           *  @return     0 if successful.
+ 717           */
+ 718          int mpu_reg_dump(void)
+ 719          {
+ 720   1          unsigned char ii;
+ 721   1          unsigned char dat;
+ 722   1      
+ 723   1          for (ii = 0; ii < st.hw->num_reg; ii++) {
+ 724   2              if (ii == st.reg->fifo_r_w || ii == st.reg->mem_r_w)
+ 725   2                  continue;
+ 726   2              if (i2c_read(st.hw->addr, ii, 1, &dat))
+ 727   2                  return -1;
+ 728   2              log_i("%#5x: %#5x\r\n", ii, dat);
+ 729   2          }
+ 730   1          return 0;
+ 731   1      }
+ 732          
+ 733          /**
+ 734           *  @brief      Read from a single register.
+ 735           *  NOTE: The memory and FIFO read/write registers cannot be accessed.
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 13  
+
+ 736           *  @param[in]  reg     Register address.
+ 737           *  @param[out] dat    Register dat.
+ 738           *  @return     0 if successful.
+ 739           */
+ 740          int mpu_read_reg(unsigned char reg, unsigned char *dat)
+ 741          {
+ 742   1          if (reg == st.reg->fifo_r_w || reg == st.reg->mem_r_w)
+ 743   1              return -1;
+ 744   1          if (reg >= st.hw->num_reg)
+ 745   1              return -1;
+ 746   1          return i2c_read(st.hw->addr, reg, 1, dat);
+ 747   1      }
+ 748          
+ 749          /**
+ 750           *  @brief      Initialize hardware.
+ 751           *  Initial configuration:\n
+ 752           *  Gyro FSR: +/- 2000DPS\n
+ 753           *  Accel FSR +/- 2G\n
+ 754           *  DLPF: 42Hz\n
+ 755           *  FIFO rate: 50Hz\n
+ 756           *  Clock source: Gyro PLL\n
+ 757           *  FIFO: Disabled.\n
+ 758           *  dat ready interrupt: Disabled, active low, unlatched.
+ 759           *  @param[in]  int_param   Platform-specific parameters to interrupt API.
+ 760           *  @return     0 if successful.
+ 761           */
+ 762          int mpu_init(void)
+ 763          {
+ 764   1          unsigned char dat[6], rev;
+ 765   1      
+ 766   1          /* Reset device. */
+ 767   1          dat[0] = BIT_RESET;
+ 768   1          if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_1, 1, dat))
+ 769   1              return -1;
+ 770   1          delay_ms(100);
+ 771   1      
+ 772   1          /* Wake up chip. */
+ 773   1          dat[0] = 0x00;
+ 774   1          if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_1, 1, dat))
+ 775   1              return -1;
+ 776   1      
+ 777   1      #if defined MPU6050
+ 778   1          /* Check product revision. */
+ 779   1          if (i2c_read(st.hw->addr, st.reg->accel_offs, 6, dat))
+ 780   1              return -1;
+ 781   1          rev = ((dat[5] & 0x01) << 2) | ((dat[3] & 0x01) << 1) |
+ 782   1              (dat[1] & 0x01);
+ 783   1      
+ 784   1          if (rev) {
+ 785   2              /* Congrats, these parts are better. */
+ 786   2              if (rev == 1)
+ 787   2                  st.chip_cfg.accel_half = 1;
+ 788   2              else if (rev == 2)
+ 789   2                  st.chip_cfg.accel_half = 0;
+ 790   2              else {
+ 791   3                  log_e("Unsupported software product rev %d.\n", rev);
+ 792   3                  return -1;
+ 793   3              }
+ 794   2          } else {
+ 795   2              if (i2c_read(st.hw->addr, st.reg->prod_id, 1, dat))
+ 796   2                  return -1;
+ 797   2              rev = dat[0] & 0x0F;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 14  
+
+ 798   2              if (!rev) {
+ 799   3                  log_e("Product ID read as 0 indicates device is either "
+ 800   3                      "incompatible or an MPU3050.\n");
+ 801   3                  return -1;
+ 802   3              } else if (rev == 4) {
+ 803   3                  log_i("Half sensitivity part found.\n");
+ 804   3                  st.chip_cfg.accel_half = 1;
+ 805   3              } else
+ 806   2                  st.chip_cfg.accel_half = 0;
+ 807   2          }
+ 808   1      #elif defined MPU6500
+              #define MPU6500_MEM_REV_ADDR    (0x17)
+                  if (mpu_read_mem(MPU6500_MEM_REV_ADDR, 1, &rev))
+                      return -1;
+                  if (rev == 0x1)
+                      st.chip_cfg.accel_half = 0;
+                  else {
+                      log_e("Unsupported software product rev %d.\n", rev);
+                      return -1;
+                  }
+              
+                  /* MPU6500 shares 4kB of memory between the DMP and the FIFO. Since the
+                   * first 3kB are needed by the DMP, we'll use the last 1kB for the FIFO.
+                   */
+                  dat[0] = BIT_FIFO_SIZE_1024 | 0x8;
+                  if (i2c_write(st.hw->addr, st.reg->accel_cfg2, 1, dat))
+                      return -1;
+              #endif
+ 826   1      
+ 827   1          /* Set to invalid values to ensure no I2C writes are skipped. */
+ 828   1          st.chip_cfg.sensors = 0xFF;
+ 829   1          st.chip_cfg.gyro_fsr = 0xFF;
+ 830   1          st.chip_cfg.accel_fsr = 0xFF;
+ 831   1          st.chip_cfg.lpf = 0xFF;
+ 832   1          st.chip_cfg.sample_rate = 0xFFFF;
+ 833   1          st.chip_cfg.fifo_enable = 0xFF;
+ 834   1          st.chip_cfg.bypass_mode = 0xFF;
+ 835   1      #ifdef AK89xx_SECONDARY
+                  st.chip_cfg.compass_sample_rate = 0xFFFF;
+              #endif
+ 838   1          /* mpu_set_sensors always preserves this setting. */
+ 839   1          st.chip_cfg.clk_src = INV_CLK_PLL;
+ 840   1          /* Handled in next call to mpu_set_bypass. */
+ 841   1          st.chip_cfg.active_low_int = 1;
+ 842   1          st.chip_cfg.latched_int = 0;
+ 843   1          st.chip_cfg.int_motion_only = 0;
+ 844   1          st.chip_cfg.lp_accel_mode = 0;
+ 845   1          memset(&st.chip_cfg.cache, 0, sizeof(st.chip_cfg.cache));
+ 846   1          st.chip_cfg.dmp_on = 0;
+ 847   1          st.chip_cfg.dmp_loaded = 0;
+ 848   1          st.chip_cfg.dmp_sample_rate = 0;
+ 849   1      
+ 850   1          if (mpu_set_gyro_fsr(2000))
+ 851   1              return -1;
+ 852   1          if (mpu_set_accel_fsr(2))
+ 853   1              return -1;
+ 854   1          if (mpu_set_lpf(42))
+ 855   1              return -1;
+ 856   1          if (mpu_set_sample_rate(50))
+ 857   1              return -1;
+ 858   1          if (mpu_configure_fifo(0))
+ 859   1              return -1;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 15  
+
+ 860   1      
+ 861   1      //    if (int_param)
+ 862   1      //        reg_int_cb(int_param);
+ 863   1      
+ 864   1      #ifdef AK89xx_SECONDARY
+                  setup_compass();
+                  if (mpu_set_compass_sample_rate(10))
+                      return -1;
+              #else
+ 869   1          /* Already disabled by setup_compass. */
+ 870   1          if (mpu_set_bypass(0))
+ 871   1              return -1;
+ 872   1      #endif
+ 873   1      
+ 874   1          mpu_set_sensors(0);
+ 875   1          return 0;
+ 876   1      }
+ 877          
+ 878          /**
+ 879           *  @brief      Enter low-power accel-only mode.
+ 880           *  In low-power accel mode, the chip goes to sleep and only wakes up to sample
+ 881           *  the accelerometer at one of the following frequencies:
+ 882           *  \n MPU6050: 1.25Hz, 5Hz, 20Hz, 40Hz
+ 883           *  \n MPU6500: 1.25Hz, 2.5Hz, 5Hz, 10Hz, 20Hz, 40Hz, 80Hz, 160Hz, 320Hz, 640Hz
+ 884           *  \n If the requested rate is not one listed above, the device will be set to
+ 885           *  the next highest rate. Requesting a rate above the maximum supported
+ 886           *  frequency will result in an error.
+ 887           *  \n To select a fractional wake-up frequency, round down the value passed to
+ 888           *  @e rate.
+ 889           *  @param[in]  rate        Minimum sampling rate, or zero to disable LP
+ 890           *                          accel mode.
+ 891           *  @return     0 if successful.
+ 892           */
+ 893          int mpu_lp_accel_mode(unsigned char rate)
+ 894          {
+ 895   1          unsigned char tmp[2];
+ 896   1      
+ 897   1          if (rate > 40)
+ 898   1              return -1;
+ 899   1      
+ 900   1          if (!rate) {
+ 901   2              mpu_set_int_latched(0);
+ 902   2              tmp[0] = 0;
+ 903   2              tmp[1] = BIT_STBY_XYZG;
+ 904   2              if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_1, 2, tmp))
+ 905   2                  return -1;
+ 906   2              st.chip_cfg.lp_accel_mode = 0;
+ 907   2              return 0;
+ 908   2          }
+ 909   1          /* For LP accel, we automatically configure the hardware to produce latched
+ 910   1           * interrupts. In LP accel mode, the hardware cycles into sleep mode before
+ 911   1           * it gets a chance to deassert the interrupt pin; therefore, we shift this
+ 912   1           * responsibility over to the MCU.
+ 913   1           *
+ 914   1           * Any register read will clear the interrupt.
+ 915   1           */
+ 916   1          mpu_set_int_latched(1);
+ 917   1      #if defined MPU6050
+ 918   1          tmp[0] = BIT_LPA_CYCLE;
+ 919   1          if (rate == 1) {
+ 920   2              tmp[1] = INV_LPA_1_25HZ;
+ 921   2              mpu_set_lpf(5);
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 16  
+
+ 922   2          } else if (rate <= 5) {
+ 923   2              tmp[1] = INV_LPA_5HZ;
+ 924   2              mpu_set_lpf(5);
+ 925   2          } else if (rate <= 20) {
+ 926   2              tmp[1] = INV_LPA_20HZ;
+ 927   2              mpu_set_lpf(10);
+ 928   2          } else {
+ 929   2              tmp[1] = INV_LPA_40HZ;
+ 930   2              mpu_set_lpf(20);
+ 931   2          }
+ 932   1          tmp[1] = (tmp[1] << 6) | BIT_STBY_XYZG;
+ 933   1          if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_1, 2, tmp))
+ 934   1              return -1;
+ 935   1      #elif defined MPU6500
+                  /* Set wake frequency. */
+                  if (rate == 1)
+                      tmp[0] = INV_LPA_1_25HZ;
+                  else if (rate == 2)
+                      tmp[0] = INV_LPA_2_5HZ;
+                  else if (rate <= 5)
+                      tmp[0] = INV_LPA_5HZ;
+                  else if (rate <= 10)
+                      tmp[0] = INV_LPA_10HZ;
+                  else if (rate <= 20)
+                      tmp[0] = INV_LPA_20HZ;
+                  else if (rate <= 40)
+                      tmp[0] = INV_LPA_40HZ;
+                  else if (rate <= 80)
+                      tmp[0] = INV_LPA_80HZ;
+                  else if (rate <= 160)
+                      tmp[0] = INV_LPA_160HZ;
+                  else if (rate <= 320)
+                      tmp[0] = INV_LPA_320HZ;
+                  else
+                      tmp[0] = INV_LPA_640HZ;
+                  if (i2c_write(st.hw->addr, st.reg->lp_accel_odr, 1, tmp))
+                      return -1;
+                  tmp[0] = BIT_LPA_CYCLE;
+                  if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_1, 1, tmp))
+                      return -1;
+              #endif
+ 963   1          st.chip_cfg.sensors = INV_XYZ_ACCEL;
+ 964   1          st.chip_cfg.clk_src = 0;
+ 965   1          st.chip_cfg.lp_accel_mode = 1;
+ 966   1          mpu_configure_fifo(0);
+ 967   1      
+ 968   1          return 0;
+ 969   1      }
+ 970          
+ 971          /**
+ 972           *  @brief      Read raw gyro dat directly from the registers.
+ 973           *  @param[out] dat        Raw dat in hardware units.
+ 974           *  @param[out] timestamp   Timestamp in milliseconds. Null if not needed.
+ 975           *  @return     0 if successful.
+ 976           */
+ 977          int mpu_get_gyro_reg(short *dat, unsigned long *timestamp)
+ 978          {
+ 979   1          unsigned char tmp[6];
+ 980   1      
+ 981   1          if (!(st.chip_cfg.sensors & INV_XYZ_GYRO))
+ 982   1              return -1;
+ 983   1      
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 17  
+
+ 984   1          if (i2c_read(st.hw->addr, st.reg->raw_gyro, 6, tmp))
+ 985   1              return -1;
+ 986   1          dat[0] = (tmp[0] << 8) | tmp[1];
+ 987   1          dat[1] = (tmp[2] << 8) | tmp[3];
+ 988   1          dat[2] = (tmp[4] << 8) | tmp[5];
+ 989   1          if (timestamp)
+ 990   1              get_ms(timestamp);
+ 991   1          return 0;
+ 992   1      }
+ 993          
+ 994          /**
+ 995           *  @brief      Read raw accel dat directly from the registers.
+ 996           *  @param[out] dat        Raw dat in hardware units.
+ 997           *  @param[out] timestamp   Timestamp in milliseconds. Null if not needed.
+ 998           *  @return     0 if successful.
+ 999           */
+1000          int mpu_get_accel_reg(short *dat, unsigned long *timestamp)
+1001          {
+1002   1          unsigned char tmp[6];
+1003   1      
+1004   1          if (!(st.chip_cfg.sensors & INV_XYZ_ACCEL))
+1005   1              return -1;
+1006   1      
+1007   1          if (i2c_read(st.hw->addr, st.reg->raw_accel, 6, tmp))
+1008   1              return -1;
+1009   1          dat[0] = (tmp[0] << 8) | tmp[1];
+1010   1          dat[1] = (tmp[2] << 8) | tmp[3];
+1011   1          dat[2] = (tmp[4] << 8) | tmp[5];
+1012   1          if (timestamp)
+1013   1              get_ms(timestamp);
+1014   1          return 0;
+1015   1      }
+1016          
+1017          /**
+1018           *  @brief      Read temperature dat directly from the registers.
+1019           *  @param[out] dat        dat in q16 format.
+1020           *  @param[out] timestamp   Timestamp in milliseconds. Null if not needed.
+1021           *  @return     0 if successful.
+1022           */
+1023          int mpu_get_temperature(long *dat, unsigned long *timestamp)
+1024          {
+1025   1          unsigned char tmp[2];
+1026   1          short raw;
+1027   1      
+1028   1          if (!(st.chip_cfg.sensors))
+1029   1              return -1;
+1030   1      
+1031   1          if (i2c_read(st.hw->addr, st.reg->temp, 2, tmp))
+1032   1              return -1;
+1033   1          raw = (tmp[0] << 8) | tmp[1];
+1034   1          if (timestamp)
+1035   1              get_ms(timestamp);
+1036   1      
+1037   1          dat[0] = (long)((35 + ((raw - (float)st.hw->temp_offset) / st.hw->temp_sens)) * 65536L);
+1038   1          return 0;
+1039   1      }
+1040          
+1041          /**
+1042           *  @brief      Push biases to the accel bias registers.
+1043           *  This function expects biases relative to the current sensor output, and
+1044           *  these biases will be added to the factory-supplied values.
+1045           *  @param[in]  accel_bias  New biases.
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 18  
+
+1046           *  @return     0 if successful.
+1047           */
+1048          int mpu_set_accel_bias(const long *accel_bias)
+1049          {
+1050   1          unsigned char dat[6];
+1051   1          short accel_hw[3];
+1052   1          short got_accel[3];
+1053   1          short fg[3];
+1054   1      
+1055   1          if (!accel_bias)
+1056   1              return -1;
+1057   1          if (!accel_bias[0] && !accel_bias[1] && !accel_bias[2])
+1058   1              return 0;
+1059   1      
+1060   1          if (i2c_read(st.hw->addr, 3, 3, dat))
+1061   1              return -1;
+1062   1          fg[0] = ((dat[0] >> 4) + 8) & 0xf;
+1063   1          fg[1] = ((dat[1] >> 4) + 8) & 0xf;
+1064   1          fg[2] = ((dat[2] >> 4) + 8) & 0xf;
+1065   1      
+1066   1          accel_hw[0] = (short)(accel_bias[0] * 2 / (64 + fg[0]));
+1067   1          accel_hw[1] = (short)(accel_bias[1] * 2 / (64 + fg[1]));
+1068   1          accel_hw[2] = (short)(accel_bias[2] * 2 / (64 + fg[2]));
+1069   1      
+1070   1          if (i2c_read(st.hw->addr, 0x06, 6, dat))
+1071   1              return -1;
+1072   1      
+1073   1          got_accel[0] = ((short)dat[0] << 8) | dat[1];
+1074   1          got_accel[1] = ((short)dat[2] << 8) | dat[3];
+1075   1          got_accel[2] = ((short)dat[4] << 8) | dat[5];
+1076   1      
+1077   1          accel_hw[0] += got_accel[0];
+1078   1          accel_hw[1] += got_accel[1];
+1079   1          accel_hw[2] += got_accel[2];
+1080   1      
+1081   1          dat[0] = (accel_hw[0] >> 8) & 0xff;
+1082   1          dat[1] = (accel_hw[0]) & 0xff;
+1083   1          dat[2] = (accel_hw[1] >> 8) & 0xff;
+1084   1          dat[3] = (accel_hw[1]) & 0xff;
+1085   1          dat[4] = (accel_hw[2] >> 8) & 0xff;
+1086   1          dat[5] = (accel_hw[2]) & 0xff;
+1087   1      
+1088   1          if (i2c_write(st.hw->addr, 0x06, 6, dat))
+1089   1              return -1;
+1090   1          return 0;
+1091   1      }
+1092          
+1093          /**
+1094           *  @brief  Reset FIFO read/write pointers.
+1095           *  @return 0 if successful.
+1096           */
+1097          int mpu_reset_fifo(void)
+1098          {
+1099   1          unsigned char dat;
+1100   1      
+1101   1          if (!(st.chip_cfg.sensors))
+1102   1              return -1;
+1103   1      
+1104   1          dat = 0;
+1105   1          if (i2c_write(st.hw->addr, st.reg->int_enable, 1, &dat))
+1106   1              return -1;
+1107   1          if (i2c_write(st.hw->addr, st.reg->fifo_en, 1, &dat))
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 19  
+
+1108   1              return -1;
+1109   1          if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, &dat))
+1110   1              return -1;
+1111   1      
+1112   1          if (st.chip_cfg.dmp_on) {
+1113   2              dat = BIT_FIFO_RST | BIT_DMP_RST;
+1114   2              if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, &dat))
+1115   2                  return -1;
+1116   2              delay_ms(50);
+1117   2              dat = BIT_DMP_EN | BIT_FIFO_EN;
+1118   2              if (st.chip_cfg.sensors & INV_XYZ_COMPASS)
+1119   2                  dat |= BIT_AUX_IF_EN;
+1120   2              if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, &dat))
+1121   2                  return -1;
+1122   2              if (st.chip_cfg.int_enable)
+1123   2                  dat = BIT_DMP_INT_EN;
+1124   2              else
+1125   2                  dat = 0;
+1126   2              if (i2c_write(st.hw->addr, st.reg->int_enable, 1, &dat))
+1127   2                  return -1;
+1128   2              dat = 0;
+1129   2              if (i2c_write(st.hw->addr, st.reg->fifo_en, 1, &dat))
+1130   2                  return -1;
+1131   2          } else {
+1132   2              dat = BIT_FIFO_RST;
+1133   2              if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, &dat))
+1134   2                  return -1;
+1135   2              if (st.chip_cfg.bypass_mode || !(st.chip_cfg.sensors & INV_XYZ_COMPASS))
+1136   2                  dat = BIT_FIFO_EN;
+1137   2              else
+1138   2                  dat = BIT_FIFO_EN | BIT_AUX_IF_EN;
+1139   2              if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, &dat))
+1140   2                  return -1;
+1141   2              delay_ms(50);
+1142   2              if (st.chip_cfg.int_enable)
+1143   2                  dat = BIT_dat_RDY_EN;
+1144   2              else
+1145   2                  dat = 0;
+1146   2              if (i2c_write(st.hw->addr, st.reg->int_enable, 1, &dat))
+1147   2                  return -1;
+1148   2              if (i2c_write(st.hw->addr, st.reg->fifo_en, 1, &st.chip_cfg.fifo_enable))
+1149   2                  return -1;
+1150   2          }
+1151   1          return 0;
+1152   1      }
+1153          
+1154          /**
+1155           *  @brief      Get the gyro full-scale range.
+1156           *  @param[out] fsr Current full-scale range.
+1157           *  @return     0 if successful.
+1158           */
+1159          int mpu_get_gyro_fsr(unsigned short *fsr)
+1160          {
+1161   1          switch (st.chip_cfg.gyro_fsr) {
+1162   2          case INV_FSR_250DPS:
+1163   2              fsr[0] = 250;
+1164   2              break;
+1165   2          case INV_FSR_500DPS:
+1166   2              fsr[0] = 500;
+1167   2              break;
+1168   2          case INV_FSR_1000DPS:
+1169   2              fsr[0] = 1000;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 20  
+
+1170   2              break;
+1171   2          case INV_FSR_2000DPS:
+1172   2              fsr[0] = 2000;
+1173   2              break;
+1174   2          default:
+1175   2              fsr[0] = 0;
+1176   2              break;
+1177   2          }
+1178   1          return 0;
+1179   1      }
+1180          
+1181          /**
+1182           *  @brief      Set the gyro full-scale range.
+1183           *  @param[in]  fsr Desired full-scale range.
+1184           *  @return     0 if successful.
+1185           */
+1186          int mpu_set_gyro_fsr(unsigned short fsr)
+1187          {
+1188   1          unsigned char dat;
+1189   1      
+1190   1          if (!(st.chip_cfg.sensors))
+1191   1              return -1;
+1192   1      
+1193   1          switch (fsr) {
+1194   2          case 250:
+1195   2              dat = INV_FSR_250DPS << 3;
+1196   2              break;
+1197   2          case 500:
+1198   2              dat = INV_FSR_500DPS << 3;
+1199   2              break;
+1200   2          case 1000:
+1201   2              dat = INV_FSR_1000DPS << 3;
+1202   2              break;
+1203   2          case 2000:
+1204   2              dat = INV_FSR_2000DPS << 3;
+1205   2              break;
+1206   2          default:
+1207   2              return -1;
+1208   2          }
+1209   1      
+1210   1          if (st.chip_cfg.gyro_fsr == (dat >> 3))
+1211   1              return 0;
+1212   1          if (i2c_write(st.hw->addr, st.reg->gyro_cfg, 1, &dat))
+1213   1              return -1;
+1214   1          st.chip_cfg.gyro_fsr = dat >> 3;
+1215   1          return 0;
+1216   1      }
+1217          
+1218          /**
+1219           *  @brief      Get the accel full-scale range.
+1220           *  @param[out] fsr Current full-scale range.
+1221           *  @return     0 if successful.
+1222           */
+1223          int mpu_get_accel_fsr(unsigned char *fsr)
+1224          {
+1225   1          switch (st.chip_cfg.accel_fsr) {
+1226   2          case INV_FSR_2G:
+1227   2              fsr[0] = 2;
+1228   2              break;
+1229   2          case INV_FSR_4G:
+1230   2              fsr[0] = 4;
+1231   2              break;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 21  
+
+1232   2          case INV_FSR_8G:
+1233   2              fsr[0] = 8;
+1234   2              break;
+1235   2          case INV_FSR_16G:
+1236   2              fsr[0] = 16;
+1237   2              break;
+1238   2          default:
+1239   2              return -1;
+1240   2          }
+1241   1          if (st.chip_cfg.accel_half)
+1242   1              fsr[0] <<= 1;
+1243   1          return 0;
+1244   1      }
+1245          
+1246          /**
+1247           *  @brief      Set the accel full-scale range.
+1248           *  @param[in]  fsr Desired full-scale range.
+1249           *  @return     0 if successful.
+1250           */
+1251          int mpu_set_accel_fsr(unsigned char fsr)
+1252          {
+1253   1          unsigned char dat;
+1254   1      
+1255   1          if (!(st.chip_cfg.sensors))
+1256   1              return -1;
+1257   1      
+1258   1          switch (fsr) {
+1259   2          case 2:
+1260   2              dat = INV_FSR_2G << 3;
+1261   2              break;
+1262   2          case 4:
+1263   2              dat = INV_FSR_4G << 3;
+1264   2              break;
+1265   2          case 8:
+1266   2              dat = INV_FSR_8G << 3;
+1267   2              break;
+1268   2          case 16:
+1269   2              dat = INV_FSR_16G << 3;
+1270   2              break;
+1271   2          default:
+1272   2              return -1;
+1273   2          }
+1274   1      
+1275   1          if (st.chip_cfg.accel_fsr == (dat >> 3))
+1276   1              return 0;
+1277   1          if (i2c_write(st.hw->addr, st.reg->accel_cfg, 1, &dat))
+1278   1              return -1;
+1279   1          st.chip_cfg.accel_fsr = dat >> 3;
+1280   1          return 0;
+1281   1      }
+1282          
+1283          /**
+1284           *  @brief      Get the current DLPF setting.
+1285           *  @param[out] lpf Current LPF setting.
+1286           *  0 if successful.
+1287           */
+1288          int mpu_get_lpf(unsigned short *lpf)
+1289          {
+1290   1          switch (st.chip_cfg.lpf) {
+1291   2          case INV_FILTER_188HZ:
+1292   2              lpf[0] = 188;
+1293   2              break;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 22  
+
+1294   2          case INV_FILTER_98HZ:
+1295   2              lpf[0] = 98;
+1296   2              break;
+1297   2          case INV_FILTER_42HZ:
+1298   2              lpf[0] = 42;
+1299   2              break;
+1300   2          case INV_FILTER_20HZ:
+1301   2              lpf[0] = 20;
+1302   2              break;
+1303   2          case INV_FILTER_10HZ:
+1304   2              lpf[0] = 10;
+1305   2              break;
+1306   2          case INV_FILTER_5HZ:
+1307   2              lpf[0] = 5;
+1308   2              break;
+1309   2          case INV_FILTER_256HZ_NOLPF2:
+1310   2          case INV_FILTER_2100HZ_NOLPF:
+1311   2          default:
+1312   2              lpf[0] = 0;
+1313   2              break;
+1314   2          }
+1315   1          return 0;
+1316   1      }
+1317          
+1318          /**
+1319           *  @brief      Set digital low pass filter.
+1320           *  The following LPF settings are supported: 188, 98, 42, 20, 10, 5.
+1321           *  @param[in]  lpf Desired LPF setting.
+1322           *  @return     0 if successful.
+1323           */
+1324          int mpu_set_lpf(unsigned short lpf)
+1325          {
+1326   1          unsigned char dat;
+1327   1      
+1328   1          if (!(st.chip_cfg.sensors))
+1329   1              return -1;
+1330   1      
+1331   1          if (lpf >= 188)
+1332   1              dat = INV_FILTER_188HZ;
+1333   1          else if (lpf >= 98)
+1334   1              dat = INV_FILTER_98HZ;
+1335   1          else if (lpf >= 42)
+1336   1              dat = INV_FILTER_42HZ;
+1337   1          else if (lpf >= 20)
+1338   1              dat = INV_FILTER_20HZ;
+1339   1          else if (lpf >= 10)
+1340   1              dat = INV_FILTER_10HZ;
+1341   1          else
+1342   1              dat = INV_FILTER_5HZ;
+1343   1      
+1344   1          if (st.chip_cfg.lpf == dat)
+1345   1              return 0;
+1346   1          if (i2c_write(st.hw->addr, st.reg->lpf, 1, &dat))
+1347   1              return -1;
+1348   1          st.chip_cfg.lpf = dat;
+1349   1          return 0;
+1350   1      }
+1351          
+1352          /**
+1353           *  @brief      Get sampling rate.
+1354           *  @param[out] rate    Current sampling rate (Hz).
+1355           *  @return     0 if successful.
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 23  
+
+1356           */
+1357          int mpu_get_sample_rate(unsigned short *rate)
+1358          {
+1359   1          if (st.chip_cfg.dmp_on)
+1360   1              return -1;
+1361   1          else
+1362   1              rate[0] = st.chip_cfg.sample_rate;
+1363   1          return 0;
+1364   1      }
+1365          
+1366          /**
+1367           *  @brief      Set sampling rate.
+1368           *  Sampling rate must be between 4Hz and 1kHz.
+1369           *  @param[in]  rate    Desired sampling rate (Hz).
+1370           *  @return     0 if successful.
+1371           */
+1372          int mpu_set_sample_rate(unsigned short rate)
+1373          {
+1374   1          unsigned char dat;
+1375   1      
+1376   1          if (!(st.chip_cfg.sensors))
+1377   1              return -1;
+1378   1      
+1379   1          if (st.chip_cfg.dmp_on)
+1380   1              return -1;
+1381   1          else {
+1382   2              if (st.chip_cfg.lp_accel_mode) {
+1383   3                  if (rate && (rate <= 40)) {
+1384   4                      /* Just stay in low-power accel mode. */
+1385   4                      mpu_lp_accel_mode(rate);
+1386   4                      return 0;
+1387   4                  }
+1388   3                  /* Requested rate exceeds the allowed frequencies in LP accel mode,
+1389   3                   * switch back to full-power mode.
+1390   3                   */
+1391   3                  mpu_lp_accel_mode(0);
+1392   3              }
+1393   2              if (rate < 4)
+1394   2                  rate = 4;
+1395   2              else if (rate > 1000)
+1396   2                  rate = 1000;
+1397   2      
+1398   2              dat = 1000 / rate - 1;
+1399   2              if (i2c_write(st.hw->addr, st.reg->rate_div, 1, &dat))
+1400   2                  return -1;
+1401   2      
+1402   2              st.chip_cfg.sample_rate = 1000 / (1 + dat);
+1403   2      
+1404   2      #ifdef AK89xx_SECONDARY
+                      mpu_set_compass_sample_rate(min(st.chip_cfg.compass_sample_rate, MAX_COMPASS_SAMPLE_RATE));
+              #endif
+1407   2      
+1408   2              /* Automatically set LPF to 1/2 sampling rate. */
+1409   2              mpu_set_lpf(st.chip_cfg.sample_rate >> 1);
+1410   2              return 0;
+1411   2          }
+1412   1      }
+1413          
+1414          /**
+1415           *  @brief      Get compass sampling rate.
+1416           *  @param[out] rate    Current compass sampling rate (Hz).
+1417           *  @return     0 if successful.
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 24  
+
+1418           */
+1419          int mpu_get_compass_sample_rate(unsigned short *rate)
+1420          {
+1421   1      #ifdef AK89xx_SECONDARY
+                  rate[0] = st.chip_cfg.compass_sample_rate;
+                  return 0;
+              #else
+1425   1          rate[0] = 0;
+1426   1          return -1;
+1427   1      #endif
+1428   1      }
+1429          
+1430          /**
+1431           *  @brief      Set compass sampling rate.
+1432           *  The compass on the auxiliary I2C bus is read by the MPU hardware at a
+1433           *  maximum of 100Hz. The actual rate can be set to a fraction of the gyro
+1434           *  sampling rate.
+1435           *
+1436           *  \n WARNING: The new rate may be different than what was requested. Call
+1437           *  mpu_get_compass_sample_rate to check the actual setting.
+1438           *  @param[in]  rate    Desired compass sampling rate (Hz).
+1439           *  @return     0 if successful.
+1440           */
+1441          int mpu_set_compass_sample_rate(unsigned short rate)
+1442          {
+1443   1      #ifdef AK89xx_SECONDARY
+                  unsigned char div;
+                  if (!rate || rate > st.chip_cfg.sample_rate || rate > MAX_COMPASS_SAMPLE_RATE)
+                      return -1;
+              
+                  div = st.chip_cfg.sample_rate / rate - 1;
+                  if (i2c_write(st.hw->addr, st.reg->s4_ctrl, 1, &div))
+                      return -1;
+                  st.chip_cfg.compass_sample_rate = st.chip_cfg.sample_rate / (div + 1);
+                  return 0;
+              #else
+1454   1          return -1;
+1455   1      #endif
+1456   1      }
+*** WARNING C280 IN LINE 1441 OF DMP\inv_mpu.c: 'rate': unreferenced local variable
+1457          
+1458          /**
+1459           *  @brief      Get gyro sensitivity scale factor.
+1460           *  @param[out] sens    Conversion from hardware units to dps.
+1461           *  @return     0 if successful.
+1462           */
+1463          int mpu_get_gyro_sens(float *sens)
+1464          {
+1465   1          switch (st.chip_cfg.gyro_fsr) {
+1466   2          case INV_FSR_250DPS:
+1467   2              sens[0] = 131.f;
+1468   2              break;
+1469   2          case INV_FSR_500DPS:
+1470   2              sens[0] = 65.5f;
+1471   2              break;
+1472   2          case INV_FSR_1000DPS:
+1473   2              sens[0] = 32.8f;
+1474   2              break;
+1475   2          case INV_FSR_2000DPS:
+1476   2              sens[0] = 16.4f;
+1477   2              break;
+1478   2          default:
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 25  
+
+1479   2              return -1;
+1480   2          }
+1481   1          return 0;
+1482   1      }
+1483          
+1484          /**
+1485           *  @brief      Get accel sensitivity scale factor.
+1486           *  @param[out] sens    Conversion from hardware units to g's.
+1487           *  @return     0 if successful.
+1488           */
+1489          int mpu_get_accel_sens(unsigned short *sens)
+1490          {
+1491   1          switch (st.chip_cfg.accel_fsr) {
+1492   2          case INV_FSR_2G:
+1493   2              sens[0] = 16384;
+1494   2              break;
+1495   2          case INV_FSR_4G:
+1496   2              sens[0] = 8092;
+1497   2              break;
+1498   2          case INV_FSR_8G:
+1499   2              sens[0] = 4096;
+1500   2              break;
+1501   2          case INV_FSR_16G:
+1502   2              sens[0] = 2048;
+1503   2              break;
+1504   2          default:
+1505   2              return -1;
+1506   2          }
+1507   1          if (st.chip_cfg.accel_half)
+1508   1              sens[0] >>= 1;
+1509   1          return 0;
+1510   1      }
+1511          
+1512          /**
+1513           *  @brief      Get current FIFO configuration.
+1514           *  @e sensors can contain a combination of the following flags:
+1515           *  \n INV_X_GYRO, INV_Y_GYRO, INV_Z_GYRO
+1516           *  \n INV_XYZ_GYRO
+1517           *  \n INV_XYZ_ACCEL
+1518           *  @param[out] sensors Mask of sensors in FIFO.
+1519           *  @return     0 if successful.
+1520           */
+1521          int mpu_get_fifo_config(unsigned char *sensors)
+1522          {
+1523   1          sensors[0] = st.chip_cfg.fifo_enable;
+1524   1          return 0;
+1525   1      }
+1526          
+1527          /**
+1528           *  @brief      Select which sensors are pushed to FIFO.
+1529           *  @e sensors can contain a combination of the following flags:
+1530           *  \n INV_X_GYRO, INV_Y_GYRO, INV_Z_GYRO
+1531           *  \n INV_XYZ_GYRO
+1532           *  \n INV_XYZ_ACCEL
+1533           *  @param[in]  sensors Mask of sensors to push to FIFO.
+1534           *  @return     0 if successful.
+1535           */
+1536          int mpu_configure_fifo(unsigned char sensors)
+1537          {
+1538   1          unsigned char prev;
+1539   1          int result = 0;
+1540   1      
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 26  
+
+1541   1          /* Compass dat isn't going into the FIFO. Stop trying. */
+1542   1          sensors &= ~INV_XYZ_COMPASS;
+1543   1      
+1544   1          if (st.chip_cfg.dmp_on)
+1545   1              return 0;
+1546   1          else {
+1547   2              if (!(st.chip_cfg.sensors))
+1548   2                  return -1;
+1549   2              prev = st.chip_cfg.fifo_enable;
+1550   2              st.chip_cfg.fifo_enable = sensors & st.chip_cfg.sensors;
+1551   2              if (st.chip_cfg.fifo_enable != sensors)
+1552   2                  /* You're not getting what you asked for. Some sensors are
+1553   2                   * asleep.
+1554   2                   */
+1555   2                  result = -1;
+1556   2              else
+1557   2                  result = 0;
+1558   2              if (sensors || st.chip_cfg.lp_accel_mode)
+1559   2                  set_int_enable(1);
+1560   2              else
+1561   2                  set_int_enable(0);
+1562   2              if (sensors) {
+1563   3                  if (mpu_reset_fifo()) {
+1564   4                      st.chip_cfg.fifo_enable = prev;
+1565   4                      return -1;
+1566   4                  }
+1567   3              }
+1568   2          }
+1569   1      
+1570   1          return result;
+1571   1      }
+1572          
+1573          /**
+1574           *  @brief      Get current power state.
+1575           *  @param[in]  power_on    1 if turned on, 0 if suspended.
+1576           *  @return     0 if successful.
+1577           */
+1578          int mpu_get_power_state(unsigned char *power_on)
+1579          {
+1580   1          if (st.chip_cfg.sensors)
+1581   1              power_on[0] = 1;
+1582   1          else
+1583   1              power_on[0] = 0;
+1584   1          return 0;
+1585   1      }
+1586          
+1587          /**
+1588           *  @brief      Turn specific sensors on/off.
+1589           *  @e sensors can contain a combination of the following flags:
+1590           *  \n INV_X_GYRO, INV_Y_GYRO, INV_Z_GYRO
+1591           *  \n INV_XYZ_GYRO
+1592           *  \n INV_XYZ_ACCEL
+1593           *  \n INV_XYZ_COMPASS
+1594           *  @param[in]  sensors    Mask of sensors to wake.
+1595           *  @return     0 if successful.
+1596           */
+1597          int mpu_set_sensors(unsigned char sensors)
+1598          {
+1599   1          unsigned char dat;
+1600   1      #ifdef AK89xx_SECONDARY
+                  unsigned char user_ctrl;
+              #endif
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 27  
+
+1603   1      
+1604   1          if (sensors & INV_XYZ_GYRO)
+1605   1              dat = INV_CLK_PLL;
+1606   1          else if (sensors)
+1607   1              dat = 0;
+1608   1          else
+1609   1              dat = BIT_SLEEP;
+1610   1          if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_1, 1, &dat)) {
+1611   2              st.chip_cfg.sensors = 0;
+1612   2              return -1;
+1613   2          }
+1614   1          st.chip_cfg.clk_src = dat & ~BIT_SLEEP;
+1615   1      
+1616   1          dat = 0;
+1617   1          if (!(sensors & INV_X_GYRO))
+1618   1              dat |= BIT_STBY_XG;
+1619   1          if (!(sensors & INV_Y_GYRO))
+1620   1              dat |= BIT_STBY_YG;
+1621   1          if (!(sensors & INV_Z_GYRO))
+1622   1              dat |= BIT_STBY_ZG;
+1623   1          if (!(sensors & INV_XYZ_ACCEL))
+1624   1              dat |= BIT_STBY_XYZA;
+1625   1          if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_2, 1, &dat)) {
+1626   2              st.chip_cfg.sensors = 0;
+1627   2              return -1;
+1628   2          }
+1629   1      
+1630   1          if (sensors && (sensors != INV_XYZ_ACCEL))
+1631   1              /* Latched interrupts only used in LP accel mode. */
+1632   1              mpu_set_int_latched(0);
+1633   1      
+1634   1      #ifdef AK89xx_SECONDARY
+              #ifdef AK89xx_BYPASS
+                  if (sensors & INV_XYZ_COMPASS)
+                      mpu_set_bypass(1);
+                  else
+                      mpu_set_bypass(0);
+              #else
+                  if (i2c_read(st.hw->addr, st.reg->user_ctrl, 1, &user_ctrl))
+                      return -1;
+                  /* Handle AKM power management. */
+                  if (sensors & INV_XYZ_COMPASS) {
+                      dat = AKM_SINGLE_MEASUREMENT;
+                      user_ctrl |= BIT_AUX_IF_EN;
+                  } else {
+                      dat = AKM_POWER_DOWN;
+                      user_ctrl &= ~BIT_AUX_IF_EN;
+                  }
+                  if (st.chip_cfg.dmp_on)
+                      user_ctrl |= BIT_DMP_EN;
+                  else
+                      user_ctrl &= ~BIT_DMP_EN;
+                  if (i2c_write(st.hw->addr, st.reg->s1_do, 1, &dat))
+                      return -1;
+                  /* Enable/disable I2C master mode. */
+                  if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, &user_ctrl))
+                      return -1;
+              #endif
+              #endif
+1662   1      
+1663   1          st.chip_cfg.sensors = sensors;
+1664   1          st.chip_cfg.lp_accel_mode = 0;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 28  
+
+1665   1          delay_ms(50);
+1666   1          return 0;
+1667   1      }
+1668          
+1669          /**
+1670           *  @brief      Read the MPU interrupt status registers.
+1671           *  @param[out] status  Mask of interrupt bits.
+1672           *  @return     0 if successful.
+1673           */
+1674          int mpu_get_int_status(short *status)
+1675          {
+1676   1          unsigned char tmp[2];
+1677   1          if (!st.chip_cfg.sensors)
+1678   1              return -1;
+1679   1          if (i2c_read(st.hw->addr, st.reg->dmp_int_status, 2, tmp))
+1680   1              return -1;
+1681   1          status[0] = (tmp[0] << 8) | tmp[1];
+1682   1          return 0;
+1683   1      }
+1684          
+1685          /**
+1686           *  @brief      Get one packet from the FIFO.
+1687           *  If @e sensors does not contain a particular sensor, disregard the dat
+1688           *  returned to that pointer.
+1689           *  \n @e sensors can contain a combination of the following flags:
+1690           *  \n INV_X_GYRO, INV_Y_GYRO, INV_Z_GYRO
+1691           *  \n INV_XYZ_GYRO
+1692           *  \n INV_XYZ_ACCEL
+1693           *  \n If the FIFO has no new dat, @e sensors will be zero.
+1694           *  \n If the FIFO is disabled, @e sensors will be zero and this function will
+1695           *  return a non-zero error code.
+1696           *  @param[out] gyro        Gyro dat in hardware units.
+1697           *  @param[out] accel       Accel dat in hardware units.
+1698           *  @param[out] timestamp   Timestamp in milliseconds.
+1699           *  @param[out] sensors     Mask of sensors read from FIFO.
+1700           *  @param[out] more        Number of remaining packets.
+1701           *  @return     0 if successful.
+1702           */
+1703          int mpu_read_fifo(short *gyro, short *accel, unsigned long *timestamp,
+1704                  unsigned char *sensors, unsigned char *more)
+1705          {
+1706   1          /* Assumes maximum packet size is gyro (6) + accel (6). */
+1707   1          unsigned char dat[MAX_PACKET_LENGTH];
+1708   1          unsigned char packet_size = 0;
+1709   1          unsigned short fifo_count, index = 0;
+1710   1      
+1711   1          if (st.chip_cfg.dmp_on)
+1712   1              return -1;
+1713   1      
+1714   1          sensors[0] = 0;
+1715   1          if (!st.chip_cfg.sensors)
+1716   1              return -1;
+1717   1          if (!st.chip_cfg.fifo_enable)
+1718   1              return -1;
+1719   1      
+1720   1          if (st.chip_cfg.fifo_enable & INV_X_GYRO)
+1721   1              packet_size += 2;
+1722   1          if (st.chip_cfg.fifo_enable & INV_Y_GYRO)
+1723   1              packet_size += 2;
+1724   1          if (st.chip_cfg.fifo_enable & INV_Z_GYRO)
+1725   1              packet_size += 2;
+1726   1          if (st.chip_cfg.fifo_enable & INV_XYZ_ACCEL)
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 29  
+
+1727   1              packet_size += 6;
+1728   1      
+1729   1          if (i2c_read(st.hw->addr, st.reg->fifo_count_h, 2, dat))
+1730   1              return -1;
+1731   1          fifo_count = (dat[0] << 8) | dat[1];
+1732   1          if (fifo_count < packet_size)
+1733   1              return 0;
+1734   1      //    log_i("FIFO count: %hd\n", fifo_count);
+1735   1          if (fifo_count > (st.hw->max_fifo >> 1)) {
+1736   2              /* FIFO is 50% full, better check overflow bit. */
+1737   2              if (i2c_read(st.hw->addr, st.reg->int_status, 1, dat))
+1738   2                  return -1;
+1739   2              if (dat[0] & BIT_FIFO_OVERFLOW) {
+1740   3                  mpu_reset_fifo();
+1741   3                  return -2;
+1742   3              }
+1743   2          }
+1744   1          get_ms((unsigned long*)timestamp);
+1745   1      
+1746   1          if (i2c_read(st.hw->addr, st.reg->fifo_r_w, packet_size, dat))
+1747   1              return -1;
+1748   1          more[0] = fifo_count / packet_size - 1;
+1749   1          sensors[0] = 0;
+1750   1      
+1751   1          if ((index != packet_size) && st.chip_cfg.fifo_enable & INV_XYZ_ACCEL) {
+1752   2              accel[0] = (dat[index+0] << 8) | dat[index+1];
+1753   2              accel[1] = (dat[index+2] << 8) | dat[index+3];
+1754   2              accel[2] = (dat[index+4] << 8) | dat[index+5];
+1755   2              sensors[0] |= INV_XYZ_ACCEL;
+1756   2              index += 6;
+1757   2          }
+1758   1          if ((index != packet_size) && st.chip_cfg.fifo_enable & INV_X_GYRO) {
+1759   2              gyro[0] = (dat[index+0] << 8) | dat[index+1];
+1760   2              sensors[0] |= INV_X_GYRO;
+1761   2              index += 2;
+1762   2          }
+1763   1          if ((index != packet_size) && st.chip_cfg.fifo_enable & INV_Y_GYRO) {
+1764   2              gyro[1] = (dat[index+0] << 8) | dat[index+1];
+1765   2              sensors[0] |= INV_Y_GYRO;
+1766   2              index += 2;
+1767   2          }
+1768   1          if ((index != packet_size) && st.chip_cfg.fifo_enable & INV_Z_GYRO) {
+1769   2              gyro[2] = (dat[index+0] << 8) | dat[index+1];
+1770   2              sensors[0] |= INV_Z_GYRO;
+1771   2              index += 2;
+1772   2          }
+1773   1      
+1774   1          return 0;
+1775   1      }
+1776          
+1777          /**
+1778           *  @brief      Get one unparsed packet from the FIFO.
+1779           *  This function should be used if the packet is to be parsed elsewhere.
+1780           *  @param[in]  length  Length of one FIFO packet.
+1781           *  @param[in]  dat    FIFO packet.
+1782           *  @param[in]  more    Number of remaining packets.
+1783           */
+1784          int mpu_read_fifo_stream(unsigned short length, unsigned char *dat,
+1785              unsigned char *more)
+1786          {
+1787   1          unsigned char tmp[2];
+1788   1          unsigned short fifo_count;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 30  
+
+1789   1          if (!st.chip_cfg.dmp_on)
+1790   1              return -1;
+1791   1          if (!st.chip_cfg.sensors)
+1792   1              return -1;
+1793   1      
+1794   1          if (i2c_read(st.hw->addr, st.reg->fifo_count_h, 2, tmp))
+1795   1              return -1;
+1796   1          fifo_count = (tmp[0] << 8) | tmp[1];
+1797   1          if (fifo_count < length) {
+1798   2              more[0] = 0;
+1799   2              return -1;
+1800   2          }
+1801   1          if (fifo_count > (st.hw->max_fifo >> 1)) {
+1802   2              /* FIFO is 50% full, better check overflow bit. */
+1803   2              if (i2c_read(st.hw->addr, st.reg->int_status, 1, tmp))
+1804   2                  return -1;
+1805   2              if (tmp[0] & BIT_FIFO_OVERFLOW) {
+1806   3                  mpu_reset_fifo();
+1807   3                  return -2;
+1808   3              }
+1809   2          }
+1810   1      
+1811   1          if (i2c_read(st.hw->addr, st.reg->fifo_r_w, length, dat))
+1812   1              return -1;
+1813   1          more[0] = fifo_count / length - 1;
+1814   1          return 0;
+1815   1      }
+1816          
+1817          /**
+1818           *  @brief      Set device to bypass mode.
+1819           *  @param[in]  bypass_on   1 to enable bypass mode.
+1820           *  @return     0 if successful.
+1821           */
+1822          int mpu_set_bypass(unsigned char bypass_on)
+1823          {
+1824   1          unsigned char tmp;
+1825   1      
+1826   1          if (st.chip_cfg.bypass_mode == bypass_on)
+1827   1              return 0;
+1828   1      
+1829   1          if (bypass_on) {
+1830   2              if (i2c_read(st.hw->addr, st.reg->user_ctrl, 1, &tmp))
+1831   2                  return -1;
+1832   2              tmp &= ~BIT_AUX_IF_EN;
+1833   2              if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, &tmp))
+1834   2                  return -1;
+1835   2              delay_ms(3);
+1836   2              tmp = BIT_BYPASS_EN;
+1837   2              if (st.chip_cfg.active_low_int)
+1838   2                  tmp |= BIT_ACTL;
+1839   2              if (st.chip_cfg.latched_int)
+1840   2                  tmp |= BIT_LATCH_EN | BIT_ANY_RD_CLR;
+1841   2              if (i2c_write(st.hw->addr, st.reg->int_pin_cfg, 1, &tmp))
+1842   2                  return -1;
+1843   2          } else {
+1844   2              /* Enable I2C master mode if compass is being used. */
+1845   2              if (i2c_read(st.hw->addr, st.reg->user_ctrl, 1, &tmp))
+1846   2                  return -1;
+1847   2              if (st.chip_cfg.sensors & INV_XYZ_COMPASS)
+1848   2                  tmp |= BIT_AUX_IF_EN;
+1849   2              else
+1850   2                  tmp &= ~BIT_AUX_IF_EN;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 31  
+
+1851   2              if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, &tmp))
+1852   2                  return -1;
+1853   2              delay_ms(3);
+1854   2              if (st.chip_cfg.active_low_int)
+1855   2                  tmp = BIT_ACTL;
+1856   2              else
+1857   2                  tmp = 0;
+1858   2              if (st.chip_cfg.latched_int)
+1859   2                  tmp |= BIT_LATCH_EN | BIT_ANY_RD_CLR;
+1860   2              if (i2c_write(st.hw->addr, st.reg->int_pin_cfg, 1, &tmp))
+1861   2                  return -1;
+1862   2          }
+1863   1          st.chip_cfg.bypass_mode = bypass_on;
+1864   1          return 0;
+1865   1      }
+1866          
+1867          /**
+1868           *  @brief      Set interrupt level.
+1869           *  @param[in]  active_low  1 for active low, 0 for active high.
+1870           *  @return     0 if successful.
+1871           */
+1872          int mpu_set_int_level(unsigned char active_low)
+1873          {
+1874   1          st.chip_cfg.active_low_int = active_low;
+1875   1          return 0;
+1876   1      }
+1877          
+1878          /**
+1879           *  @brief      Enable latched interrupts.
+1880           *  Any MPU register will clear the interrupt.
+1881           *  @param[in]  enable  1 to enable, 0 to disable.
+1882           *  @return     0 if successful.
+1883           */
+1884          int mpu_set_int_latched(unsigned char enable)
+1885          {
+1886   1          unsigned char tmp;
+1887   1          if (st.chip_cfg.latched_int == enable)
+1888   1              return 0;
+1889   1      
+1890   1          if (enable)
+1891   1              tmp = BIT_LATCH_EN | BIT_ANY_RD_CLR;
+1892   1          else
+1893   1              tmp = 0;
+1894   1          if (st.chip_cfg.bypass_mode)
+1895   1              tmp |= BIT_BYPASS_EN;
+1896   1          if (st.chip_cfg.active_low_int)
+1897   1              tmp |= BIT_ACTL;
+1898   1          if (i2c_write(st.hw->addr, st.reg->int_pin_cfg, 1, &tmp))
+1899   1              return -1;
+1900   1          st.chip_cfg.latched_int = enable;
+1901   1          return 0;
+1902   1      }
+1903          
+1904          #ifdef MPU6050
+1905          static int get_accel_prod_shift(float *st_shift)
+1906          {
+1907   1          unsigned char tmp[4], shift_code[3], ii;
+1908   1      
+1909   1          if (i2c_read(st.hw->addr, 0x0D, 4, tmp))
+1910   1              return 0x07;
+1911   1      
+1912   1          shift_code[0] = ((tmp[0] & 0xE0) >> 3) | ((tmp[3] & 0x30) >> 4);
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 32  
+
+1913   1          shift_code[1] = ((tmp[1] & 0xE0) >> 3) | ((tmp[3] & 0x0C) >> 2);
+1914   1          shift_code[2] = ((tmp[2] & 0xE0) >> 3) | (tmp[3] & 0x03);
+1915   1          for (ii = 0; ii < 3; ii++) {
+1916   2              if (!shift_code[ii]) {
+1917   3                  st_shift[ii] = 0.f;
+1918   3                  continue;
+1919   3              }
+1920   2              /* Equivalent to..
+1921   2               * st_shift[ii] = 0.34f * powf(0.92f/0.34f, (shift_code[ii]-1) / 30.f)
+1922   2               */
+1923   2              st_shift[ii] = 0.34f;
+1924   2              while (--shift_code[ii])
+1925   2                  st_shift[ii] *= 1.034f;
+1926   2          }
+1927   1          return 0;
+1928   1      }
+1929          
+1930          static int accel_self_test(long *bias_regular, long *bias_st)
+1931          {
+1932   1          int jj, result = 0;
+1933   1          float st_shift[3], st_shift_cust, st_shift_var;
+1934   1      
+1935   1          get_accel_prod_shift(st_shift);
+1936   1          for(jj = 0; jj < 3; jj++) {
+1937   2              st_shift_cust = labs(bias_regular[jj] - bias_st[jj]) / 65536.f;
+1938   2              if (st_shift[jj]) {
+1939   3                  st_shift_var = st_shift_cust / st_shift[jj] - 1.f;
+1940   3                  if (fabs(st_shift_var) > test.max_accel_var)
+*** WARNING C206 IN LINE 1940 OF DMP\inv_mpu.c: 'fabsf': missing function-prototype
+*** ERROR C267 IN LINE 1940 OF DMP\inv_mpu.c: 'fabsf': requires ANSI-style prototype
+1941   3                      result |= 1 << jj;
+1942   3              } else if ((st_shift_cust < test.min_g) ||
+1943   2                  (st_shift_cust > test.max_g))
+1944   2                  result |= 1 << jj;
+1945   2          }
+1946   1      
+1947   1          return result;
+1948   1      }
+1949          
+1950          static int gyro_self_test(long *bias_regular, long *bias_st)
+1951          {
+1952   1          int jj, result = 0;
+1953   1          unsigned char tmp[3];
+1954   1          float st_shift, st_shift_cust, st_shift_var;
+1955   1      
+1956   1          if (i2c_read(st.hw->addr, 0x0D, 3, tmp))
+1957   1              return 0x07;
+1958   1      
+1959   1          tmp[0] &= 0x1F;
+1960   1          tmp[1] &= 0x1F;
+1961   1          tmp[2] &= 0x1F;
+1962   1      
+1963   1          for (jj = 0; jj < 3; jj++) {
+1964   2              st_shift_cust = labs(bias_regular[jj] - bias_st[jj]) / 65536.f;
+1965   2              if (tmp[jj]) {
+1966   3                  st_shift = 3275.f / test.gyro_sens;
+1967   3                  while (--tmp[jj])
+*** ERROR C187 IN LINE 1967 OF DMP\inv_mpu.c: not an lvalue
+1968   3                      st_shift *= 1.046f;
+1969   3                  st_shift_var = st_shift_cust / st_shift - 1.f;
+1970   3                  if (fabs(st_shift_var) > test.max_gyro_var)
+1971   3                      result |= 1 << jj;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 33  
+
+1972   3              } else if ((st_shift_cust < test.min_dps) ||
+1973   2                  (st_shift_cust > test.max_dps))
+1974   2                  result |= 1 << jj;
+1975   2          }
+1976   1          return result;
+1977   1      }
+1978          
+1979          #ifdef AK89xx_SECONDARY
+              static int compass_self_test(void)
+              {
+                  unsigned char tmp[6];
+                  unsigned char tries = 10;
+                  int result = 0x07;
+                  short dat;
+              
+                  mpu_set_bypass(1);
+              
+                  tmp[0] = AKM_POWER_DOWN;
+                  if (i2c_write(st.chip_cfg.compass_addr, AKM_REG_CNTL, 1, tmp))
+                      return 0x07;
+                  tmp[0] = AKM_BIT_SELF_TEST;
+                  if (i2c_write(st.chip_cfg.compass_addr, AKM_REG_ASTC, 1, tmp))
+                      goto AKM_restore;
+                  tmp[0] = AKM_MODE_SELF_TEST;
+                  if (i2c_write(st.chip_cfg.compass_addr, AKM_REG_CNTL, 1, tmp))
+                      goto AKM_restore;
+              
+                  do {
+                      delay_ms(10);
+                      if (i2c_read(st.chip_cfg.compass_addr, AKM_REG_ST1, 1, tmp))
+                          goto AKM_restore;
+                      if (tmp[0] & AKM_dat_READY)
+                          break;
+                  } while (tries--);
+                  if (!(tmp[0] & AKM_dat_READY))
+                      goto AKM_restore;
+              
+                  if (i2c_read(st.chip_cfg.compass_addr, AKM_REG_HXL, 6, tmp))
+                      goto AKM_restore;
+              
+                  result = 0;
+                  dat = (short)(tmp[1] << 8) | tmp[0];
+                  if ((dat > 100) || (dat < -100))
+                      result |= 0x01;
+                  dat = (short)(tmp[3] << 8) | tmp[2];
+                  if ((dat > 100) || (dat < -100))
+                      result |= 0x02;
+                  dat = (short)(tmp[5] << 8) | tmp[4];
+                  if ((dat > -300) || (dat < -1000))
+                      result |= 0x04;
+              
+              AKM_restore:
+                  tmp[0] = 0 | SUPPORTS_AK89xx_HIGH_SENS;
+                  i2c_write(st.chip_cfg.compass_addr, AKM_REG_ASTC, 1, tmp);
+                  tmp[0] = SUPPORTS_AK89xx_HIGH_SENS;
+                  i2c_write(st.chip_cfg.compass_addr, AKM_REG_CNTL, 1, tmp);
+                  mpu_set_bypass(0);
+                  return result;
+              }
+              #endif
+2032          #endif
+2033          
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 34  
+
+2034          static int get_st_biases(long *gyro, long *accel, unsigned char hw_test)
+2035          {
+2036   1          unsigned char dat[MAX_PACKET_LENGTH];
+2037   1          unsigned char packet_count, ii;
+2038   1          unsigned short fifo_count;
+2039   1      
+2040   1          dat[0] = 0x01;
+2041   1          dat[1] = 0;
+2042   1          if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_1, 2, dat))
+2043   1              return -1;
+2044   1          delay_ms(200);
+2045   1          dat[0] = 0;
+2046   1          if (i2c_write(st.hw->addr, st.reg->int_enable, 1, dat))
+2047   1              return -1;
+2048   1          if (i2c_write(st.hw->addr, st.reg->fifo_en, 1, dat))
+2049   1              return -1;
+2050   1          if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_1, 1, dat))
+2051   1              return -1;
+2052   1          if (i2c_write(st.hw->addr, st.reg->i2c_mst, 1, dat))
+2053   1              return -1;
+2054   1          if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, dat))
+2055   1              return -1;
+2056   1          dat[0] = BIT_FIFO_RST | BIT_DMP_RST;
+2057   1          if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, dat))
+2058   1              return -1;
+2059   1          delay_ms(15);
+2060   1          dat[0] = st.test->reg_lpf;
+2061   1          if (i2c_write(st.hw->addr, st.reg->lpf, 1, dat))
+2062   1              return -1;
+2063   1          dat[0] = st.test->reg_rate_div;
+2064   1          if (i2c_write(st.hw->addr, st.reg->rate_div, 1, dat))
+2065   1              return -1;
+2066   1          if (hw_test)
+2067   1              dat[0] = st.test->reg_gyro_fsr | 0xE0;
+2068   1          else
+2069   1              dat[0] = st.test->reg_gyro_fsr;
+2070   1          if (i2c_write(st.hw->addr, st.reg->gyro_cfg, 1, dat))
+2071   1              return -1;
+2072   1      
+2073   1          if (hw_test)
+2074   1              dat[0] = st.test->reg_accel_fsr | 0xE0;
+2075   1          else
+2076   1              dat[0] = test.reg_accel_fsr;
+2077   1          if (i2c_write(st.hw->addr, st.reg->accel_cfg, 1, dat))
+2078   1              return -1;
+2079   1          if (hw_test)
+2080   1              delay_ms(200);
+2081   1      
+2082   1          /* Fill FIFO for test.wait_ms milliseconds. */
+2083   1          dat[0] = BIT_FIFO_EN;
+2084   1          if (i2c_write(st.hw->addr, st.reg->user_ctrl, 1, dat))
+2085   1              return -1;
+2086   1      
+2087   1          dat[0] = INV_XYZ_GYRO | INV_XYZ_ACCEL;
+2088   1          if (i2c_write(st.hw->addr, st.reg->fifo_en, 1, dat))
+2089   1              return -1;
+2090   1          delay_ms(test.wait_ms);
+2091   1          dat[0] = 0;
+2092   1          if (i2c_write(st.hw->addr, st.reg->fifo_en, 1, dat))
+2093   1              return -1;
+2094   1      
+2095   1          if (i2c_read(st.hw->addr, st.reg->fifo_count_h, 2, dat))
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 35  
+
+2096   1              return -1;
+2097   1      
+2098   1          fifo_count = (dat[0] << 8) | dat[1];
+2099   1          packet_count = fifo_count / MAX_PACKET_LENGTH;
+2100   1          gyro[0] = gyro[1] = gyro[2] = 0;
+2101   1          accel[0] = accel[1] = accel[2] = 0;
+2102   1      
+2103   1          for (ii = 0; ii < packet_count; ii++) {
+2104   2              short accel_cur[3], gyro_cur[3];
+2105   2              if (i2c_read(st.hw->addr, st.reg->fifo_r_w, MAX_PACKET_LENGTH, dat))
+2106   2                  return -1;
+2107   2              accel_cur[0] = ((short)dat[0] << 8) | dat[1];
+2108   2              accel_cur[1] = ((short)dat[2] << 8) | dat[3];
+2109   2              accel_cur[2] = ((short)dat[4] << 8) | dat[5];
+2110   2              accel[0] += (long)accel_cur[0];
+2111   2              accel[1] += (long)accel_cur[1];
+2112   2              accel[2] += (long)accel_cur[2];
+2113   2              gyro_cur[0] = (((short)dat[6] << 8) | dat[7]);
+2114   2              gyro_cur[1] = (((short)dat[8] << 8) | dat[9]);
+2115   2              gyro_cur[2] = (((short)dat[10] << 8) | dat[11]);
+2116   2              gyro[0] += (long)gyro_cur[0];
+2117   2              gyro[1] += (long)gyro_cur[1];
+2118   2              gyro[2] += (long)gyro_cur[2];
+2119   2          }
+2120   1      #ifdef EMPL_NO_64BIT
+                  gyro[0] = (long)(((float)gyro[0]*65536.f) / test.gyro_sens / packet_count);
+                  gyro[1] = (long)(((float)gyro[1]*65536.f) / test.gyro_sens / packet_count);
+                  gyro[2] = (long)(((float)gyro[2]*65536.f) / test.gyro_sens / packet_count);
+                  if (has_accel) {
+                      accel[0] = (long)(((float)accel[0]*65536.f) / test.accel_sens /
+                          packet_count);
+                      accel[1] = (long)(((float)accel[1]*65536.f) / test.accel_sens /
+                          packet_count);
+                      accel[2] = (long)(((float)accel[2]*65536.f) / test.accel_sens /
+                          packet_count);
+                      /* Don't remove gravity! */
+                      accel[2] -= 65536L;
+                  }
+              #else
+2135   1          gyro[0] = (long)(((long long)gyro[0]<<16) / test.gyro_sens / packet_count);
+*** ERROR C141 IN LINE 2135 OF DMP\inv_mpu.c: syntax error near 'long', expected ')'
+2136   1          gyro[1] = (long)(((long long)gyro[1]<<16) / test.gyro_sens / packet_count);
+*** ERROR C141 IN LINE 2136 OF DMP\inv_mpu.c: syntax error near 'long', expected ')'
+2137   1          gyro[2] = (long)(((long long)gyro[2]<<16) / test.gyro_sens / packet_count);
+*** ERROR C141 IN LINE 2137 OF DMP\inv_mpu.c: syntax error near 'long', expected ')'
+2138   1          accel[0] = (long)(((long long)accel[0]<<16) / test.accel_sens /
+*** ERROR C141 IN LINE 2138 OF DMP\inv_mpu.c: syntax error near 'long', expected ')'
+2139   1              packet_count);
+2140   1          accel[1] = (long)(((long long)accel[1]<<16) / test.accel_sens /
+*** ERROR C141 IN LINE 2140 OF DMP\inv_mpu.c: syntax error near 'long', expected ')'
+2141   1              packet_count);
+2142   1          accel[2] = (long)(((long long)accel[2]<<16) / test.accel_sens /
+*** ERROR C141 IN LINE 2142 OF DMP\inv_mpu.c: syntax error near 'long', expected ')'
+2143   1              packet_count);
+2144   1          /* Don't remove gravity! */
+2145   1          if (accel[2] > 0L)
+2146   1              accel[2] -= 65536L;
+2147   1          else
+2148   1              accel[2] += 65536L;
+2149   1      #endif
+2150   1      
+2151   1          return 0;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 36  
+
+2152   1      }
+2153          
+2154          /**
+2155           *  @brief      Trigger gyro/accel/compass self-test.
+2156           *  On success/error, the self-test returns a mask representing the sensor(s)
+2157           *  that failed. For each bit, a one (1) represents a "pass" case; conversely,
+2158           *  a zero (0) indicates a failure.
+2159           *
+2160           *  \n The mask is defined as follows:
+2161           *  \n Bit 0:   Gyro.
+2162           *  \n Bit 1:   Accel.
+2163           *  \n Bit 2:   Compass.
+2164           *
+2165           *  \n Currently, the hardware self-test is unsupported for MPU6500. However,
+2166           *  this function can still be used to obtain the accel and gyro biases.
+2167           *
+2168           *  \n This function must be called with the device either face-up or face-down
+2169           *  (z-axis is parallel to gravity).
+2170           *  @param[out] gyro        Gyro biases in q16 format.
+2171           *  @param[out] accel       Accel biases (if applicable) in q16 format.
+2172           *  @return     Result mask (see above).
+2173           */
+2174          int mpu_run_self_test(long *gyro, long *accel)
+2175          {
+2176   1      #ifdef MPU6050
+2177   1          const unsigned char tries = 2;
+2178   1          long gyro_st[3], accel_st[3];
+2179   1          unsigned char accel_result, gyro_result;
+2180   1      #ifdef AK89xx_SECONDARY
+                  unsigned char compass_result;
+              #endif
+2183   1          int ii;
+2184   1      #endif
+2185   1          int result;
+2186   1          unsigned char accel_fsr, fifo_sensors, sensors_on;
+2187   1          unsigned short gyro_fsr, sample_rate, lpf;
+2188   1          unsigned char dmp_was_on;
+2189   1      
+2190   1          if (st.chip_cfg.dmp_on) {
+2191   2              mpu_set_dmp_state(0);
+2192   2              dmp_was_on = 1;
+2193   2          } else
+2194   1              dmp_was_on = 0;
+2195   1      
+2196   1          /* Get initial settings. */
+2197   1          mpu_get_gyro_fsr(&gyro_fsr);
+2198   1          mpu_get_accel_fsr(&accel_fsr);
+2199   1          mpu_get_lpf(&lpf);
+2200   1          mpu_get_sample_rate(&sample_rate);
+2201   1          sensors_on = st.chip_cfg.sensors;
+2202   1          mpu_get_fifo_config(&fifo_sensors);
+2203   1      
+2204   1          /* For older chips, the self-test will be different. */
+2205   1      #if defined MPU6050
+2206   1          for (ii = 0; ii < tries; ii++)
+2207   1              if (!get_st_biases(gyro, accel, 0))
+2208   1                  break;
+2209   1          if (ii == tries) {
+2210   2              /* If we reach this point, we most likely encountered an I2C error.
+2211   2               * We'll just report an error for all three sensors.
+2212   2               */
+2213   2              result = 0;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 37  
+
+2214   2              goto restore;
+2215   2          }
+2216   1          for (ii = 0; ii < tries; ii++)
+2217   1              if (!get_st_biases(gyro_st, accel_st, 1))
+2218   1                  break;
+2219   1          if (ii == tries) {
+2220   2              /* Again, probably an I2C error. */
+2221   2              result = 0;
+2222   2              goto restore;
+2223   2          }
+2224   1          accel_result = accel_self_test(accel, accel_st);
+2225   1          gyro_result = gyro_self_test(gyro, gyro_st);
+2226   1      
+2227   1          result = 0;
+2228   1          if (!gyro_result)
+2229   1              result |= 0x01;
+2230   1          if (!accel_result)
+2231   1              result |= 0x02;
+2232   1      
+2233   1      #ifdef AK89xx_SECONDARY
+                  compass_result = compass_self_test();
+                  if (!compass_result)
+                      result |= 0x04;
+              #endif
+2238   1      restore:
+2239   1      #elif defined MPU6500
+                  /* For now, this function will return a "pass" result for all three sensors
+                   * for compatibility with current test applications.
+                   */
+                  get_st_biases(gyro, accel, 0);
+                  result = 0x7;
+              #endif
+2246   1          /* Set to invalid values to ensure no I2C writes are skipped. */
+2247   1          st.chip_cfg.gyro_fsr = 0xFF;
+2248   1          st.chip_cfg.accel_fsr = 0xFF;
+2249   1          st.chip_cfg.lpf = 0xFF;
+2250   1          st.chip_cfg.sample_rate = 0xFFFF;
+2251   1          st.chip_cfg.sensors = 0xFF;
+2252   1          st.chip_cfg.fifo_enable = 0xFF;
+2253   1          st.chip_cfg.clk_src = INV_CLK_PLL;
+2254   1          mpu_set_gyro_fsr(gyro_fsr);
+2255   1          mpu_set_accel_fsr(accel_fsr);
+2256   1          mpu_set_lpf(lpf);
+2257   1          mpu_set_sample_rate(sample_rate);
+2258   1          mpu_set_sensors(sensors_on);
+2259   1          mpu_configure_fifo(fifo_sensors);
+2260   1      
+2261   1          if (dmp_was_on)
+2262   1              mpu_set_dmp_state(1);
+2263   1      
+2264   1          return result;
+2265   1      }
+2266          
+2267          /**
+2268           *  @brief      Write to the DMP memory.
+2269           *  This function prevents I2C writes past the bank boundaries. The DMP memory
+2270           *  is only accessible when the chip is awake.
+2271           *  @param[in]  mem_addr    Memory location (bank << 8 | start address)
+2272           *  @param[in]  length      Number of bytes to write.
+2273           *  @param[in]  dat        Bytes to write to memory.
+2274           *  @return     0 if successful.
+2275           */
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 38  
+
+2276          int mpu_write_mem(unsigned short mem_addr, unsigned short length,
+2277                  unsigned char *dat)
+2278          {
+2279   1          unsigned char tmp[2];
+2280   1      
+2281   1          if (!dat)
+2282   1              return -1;
+2283   1          if (!st.chip_cfg.sensors)
+2284   1              return -1;
+2285   1      
+2286   1          tmp[0] = (unsigned char)(mem_addr >> 8);
+2287   1          tmp[1] = (unsigned char)(mem_addr & 0xFF);
+2288   1      
+2289   1          /* Check bank boundaries. */
+2290   1          if (tmp[1] + length > st.hw->bank_size)
+2291   1              return -1;
+2292   1      
+2293   1          if (i2c_write(st.hw->addr, st.reg->bank_sel, 2, tmp))
+2294   1              return -1;
+2295   1          if (i2c_write(st.hw->addr, st.reg->mem_r_w, length, dat))
+2296   1              return -1;
+2297   1          return 0;
+2298   1      }
+2299          
+2300          /**
+2301           *  @brief      Read from the DMP memory.
+2302           *  This function prevents I2C reads past the bank boundaries. The DMP memory
+2303           *  is only accessible when the chip is awake.
+2304           *  @param[in]  mem_addr    Memory location (bank << 8 | start address)
+2305           *  @param[in]  length      Number of bytes to read.
+2306           *  @param[out] dat        Bytes read from memory.
+2307           *  @return     0 if successful.
+2308           */
+2309          int mpu_read_mem(unsigned short mem_addr, unsigned short length,
+2310                  unsigned char *dat)
+2311          {
+2312   1          unsigned char tmp[2];
+2313   1      
+2314   1          if (!dat)
+2315   1              return -1;
+2316   1          if (!st.chip_cfg.sensors)
+2317   1              return -1;
+2318   1      
+2319   1          tmp[0] = (unsigned char)(mem_addr >> 8);
+2320   1          tmp[1] = (unsigned char)(mem_addr & 0xFF);
+2321   1      
+2322   1          /* Check bank boundaries. */
+2323   1          if (tmp[1] + length > st.hw->bank_size)
+2324   1              return -1;
+2325   1      
+2326   1          if (i2c_write(st.hw->addr, st.reg->bank_sel, 2, tmp))
+2327   1              return -1;
+2328   1          if (i2c_read(st.hw->addr, st.reg->mem_r_w, length, dat))
+2329   1              return -1;
+2330   1          return 0;
+2331   1      }
+2332          
+2333          /**
+2334           *  @brief      Load and verify DMP image.
+2335           *  @param[in]  length      Length of DMP image.
+2336           *  @param[in]  firmware    DMP code.
+2337           *  @param[in]  start_addr  Starting address of DMP code memory.
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 39  
+
+2338           *  @param[in]  sample_rate Fixed sampling rate used when DMP is enabled.
+2339           *  @return     0 if successful.
+2340           */
+2341          int mpu_load_firmware(unsigned short length, const unsigned char *firmware,
+2342              unsigned short start_addr, unsigned short sample_rate)
+2343          {
+2344   1          unsigned short ii;
+2345   1          unsigned short this_write;
+2346   1          /* Must divide evenly into st.hw->bank_size to avoid bank crossings. */
+2347   1      #define LOAD_CHUNK  (16)
+2348   1          unsigned char cur[LOAD_CHUNK], tmp[2];
+2349   1      
+2350   1          if (st.chip_cfg.dmp_loaded)
+2351   1              /* DMP should only be loaded once. */
+2352   1              return -1;
+2353   1      
+2354   1          if (!firmware)
+2355   1              return -1;
+2356   1          for (ii = 0; ii < length; ii += this_write) {
+2357   2              this_write = min(LOAD_CHUNK, length - ii);
+2358   2              if (mpu_write_mem(ii, this_write, (unsigned char*)&firmware[ii]))
+2359   2                  return -1;
+2360   2              if (mpu_read_mem(ii, this_write, cur))
+2361   2                  return -1;
+2362   2              if (memcmp(firmware+ii, cur, this_write))
+2363   2                  return -2;
+2364   2          }
+2365   1      
+2366   1          /* Set program start address. */
+2367   1          tmp[0] = start_addr >> 8;
+2368   1          tmp[1] = start_addr & 0xFF;
+2369   1          if (i2c_write(st.hw->addr, st.reg->prgm_start_h, 2, tmp))
+2370   1              return -1;
+2371   1      
+2372   1          st.chip_cfg.dmp_loaded = 1;
+2373   1          st.chip_cfg.dmp_sample_rate = sample_rate;
+2374   1          return 0;
+2375   1      }
+2376          
+2377          /**
+2378           *  @brief      Enable/disable DMP support.
+2379           *  @param[in]  enable  1 to turn on the DMP.
+2380           *  @return     0 if successful.
+2381           */
+2382          int mpu_set_dmp_state(unsigned char enable)
+2383          {
+2384   1          unsigned char tmp;
+2385   1          if (st.chip_cfg.dmp_on == enable)
+2386   1              return 0;
+2387   1      
+2388   1          if (enable) {
+2389   2              if (!st.chip_cfg.dmp_loaded)
+2390   2                  return -1;
+2391   2              /* Disable dat ready interrupt. */
+2392   2              set_int_enable(0);
+2393   2              /* Disable bypass mode. */
+2394   2              mpu_set_bypass(0);
+2395   2              /* Keep constant sample rate, FIFO rate controlled by DMP. */
+2396   2              mpu_set_sample_rate(st.chip_cfg.dmp_sample_rate);
+2397   2              /* Remove FIFO elements. */
+2398   2              tmp = 0;
+2399   2              i2c_write(st.hw->addr, 0x23, 1, &tmp);
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 40  
+
+2400   2              st.chip_cfg.dmp_on = 1;
+2401   2              /* Enable DMP interrupt. */
+2402   2              set_int_enable(1);
+2403   2              mpu_reset_fifo();
+2404   2          } else {
+2405   2              /* Disable DMP interrupt. */
+2406   2              set_int_enable(0);
+2407   2              /* Restore FIFO settings. */
+2408   2              tmp = st.chip_cfg.fifo_enable;
+2409   2              i2c_write(st.hw->addr, 0x23, 1, &tmp);
+2410   2              st.chip_cfg.dmp_on = 0;
+2411   2              mpu_reset_fifo();
+2412   2          }
+2413   1          return 0;
+2414   1      }
+2415          
+2416          /**
+2417           *  @brief      Get DMP state.
+2418           *  @param[out] enabled 1 if enabled.
+2419           *  @return     0 if successful.
+2420           */
+2421          int mpu_get_dmp_state(unsigned char *enabled)
+2422          {
+2423   1          enabled[0] = st.chip_cfg.dmp_on;
+2424   1          return 0;
+2425   1      }
+2426          
+2427          
+2428          /* This initialization is similar to the one in ak8975.c. */
+2429          int setup_compass(void)
+2430          {
+2431   1      #ifdef AK89xx_SECONDARY
+                  unsigned char dat[4], akm_addr;
+              
+                  mpu_set_bypass(1);
+              
+                  /* Find compass. Possible addresses range from 0x0C to 0x0F. */
+                  for (akm_addr = 0x0C; akm_addr <= 0x0F; akm_addr++) {
+                      int result;
+                      result = i2c_read(akm_addr, AKM_REG_WHOAMI, 1, dat);
+                      if (!result && (dat[0] == AKM_WHOAMI))
+                          break;
+                  }
+              
+                  if (akm_addr > 0x0F) {
+                      /* TODO: Handle this case in all compass-related functions. */
+                      log_e("Compass not found.\n");
+                      return -1;
+                  }
+              
+                  st.chip_cfg.compass_addr = akm_addr;
+              
+                  dat[0] = AKM_POWER_DOWN;
+                  if (i2c_write(st.chip_cfg.compass_addr, AKM_REG_CNTL, 1, dat))
+                      return -1;
+                  delay_ms(1);
+              
+                  dat[0] = AKM_FUSE_ROM_ACCESS;
+                  if (i2c_write(st.chip_cfg.compass_addr, AKM_REG_CNTL, 1, dat))
+                      return -1;
+                  delay_ms(1);
+              
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 41  
+
+                  /* Get sensitivity adjustment dat from fuse ROM. */
+                  if (i2c_read(st.chip_cfg.compass_addr, AKM_REG_ASAX, 3, dat))
+                      return -1;
+                  st.chip_cfg.mag_sens_adj[0] = (long)dat[0] + 128;
+                  st.chip_cfg.mag_sens_adj[1] = (long)dat[1] + 128;
+                  st.chip_cfg.mag_sens_adj[2] = (long)dat[2] + 128;
+              
+                  dat[0] = AKM_POWER_DOWN;
+                  if (i2c_write(st.chip_cfg.compass_addr, AKM_REG_CNTL, 1, dat))
+                      return -1;
+                  delay_ms(1);
+              
+                  mpu_set_bypass(0);
+              
+                  /* Set up master mode, master clock, and ES bit. */
+                  dat[0] = 0x40;
+                  if (i2c_write(st.hw->addr, st.reg->i2c_mst, 1, dat))
+                      return -1;
+              
+                  /* Slave 0 reads from AKM dat registers. */
+                  dat[0] = BIT_I2C_READ | st.chip_cfg.compass_addr;
+                  if (i2c_write(st.hw->addr, st.reg->s0_addr, 1, dat))
+                      return -1;
+              
+                  /* Compass reads start at this register. */
+                  dat[0] = AKM_REG_ST1;
+                  if (i2c_write(st.hw->addr, st.reg->s0_reg, 1, dat))
+                      return -1;
+              
+                  /* Enable slave 0, 8-byte reads. */
+                  dat[0] = BIT_SLAVE_EN | 8;
+                  if (i2c_write(st.hw->addr, st.reg->s0_ctrl, 1, dat))
+                      return -1;
+              
+                  /* Slave 1 changes AKM measurement mode. */
+                  dat[0] = st.chip_cfg.compass_addr;
+                  if (i2c_write(st.hw->addr, st.reg->s1_addr, 1, dat))
+                      return -1;
+              
+                  /* AKM measurement mode register. */
+                  dat[0] = AKM_REG_CNTL;
+                  if (i2c_write(st.hw->addr, st.reg->s1_reg, 1, dat))
+                      return -1;
+              
+                  /* Enable slave 1, 1-byte writes. */
+                  dat[0] = BIT_SLAVE_EN | 1;
+                  if (i2c_write(st.hw->addr, st.reg->s1_ctrl, 1, dat))
+                      return -1;
+              
+                  /* Set slave 1 dat. */
+                  dat[0] = AKM_SINGLE_MEASUREMENT;
+                  if (i2c_write(st.hw->addr, st.reg->s1_do, 1, dat))
+                      return -1;
+              
+                  /* Trigger slave 0 and slave 1 actions at each sample. */
+                  dat[0] = 0x03;
+                  if (i2c_write(st.hw->addr, st.reg->i2c_delay_ctrl, 1, dat))
+                      return -1;
+              
+              #ifdef MPU9150
+                  /* For the MPU9150, the auxiliary I2C bus needs to be set to VDD. */
+                  dat[0] = BIT_I2C_MST_VDDIO;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 42  
+
+                  if (i2c_write(st.hw->addr, st.reg->yg_offs_tc, 1, dat))
+                      return -1;
+              #endif
+              
+                  return 0;
+              #else
+2530   1          return -1;
+2531   1      #endif
+2532   1      }
+2533          
+2534          /**
+2535           *  @brief      Read raw compass dat.
+2536           *  @param[out] dat        Raw dat in hardware units.
+2537           *  @param[out] timestamp   Timestamp in milliseconds. Null if not needed.
+2538           *  @return     0 if successful.
+2539           */
+2540          int mpu_get_compass_reg(short *dat, unsigned long *timestamp)
+2541          {
+2542   1      #ifdef AK89xx_SECONDARY
+                  unsigned char tmp[9];
+              
+                  if (!(st.chip_cfg.sensors & INV_XYZ_COMPASS))
+                      return -1;
+              
+              #ifdef AK89xx_BYPASS
+                  if (i2c_read(st.chip_cfg.compass_addr, AKM_REG_ST1, 8, tmp))
+                      return -1;
+                  tmp[8] = AKM_SINGLE_MEASUREMENT;
+                  if (i2c_write(st.chip_cfg.compass_addr, AKM_REG_CNTL, 1, tmp+8))
+                      return -1;
+              #else
+                  if (i2c_read(st.hw->addr, st.reg->raw_compass, 8, tmp))
+                      return -1;
+              #endif
+              
+              #if defined AK8975_SECONDARY
+                  /* AK8975 doesn't have the overrun error bit. */
+                  if (!(tmp[0] & AKM_dat_READY))
+                      return -2;
+                  if ((tmp[7] & AKM_OVERFLOW) || (tmp[7] & AKM_dat_ERROR))
+                      return -3;
+              #elif defined AK8963_SECONDARY
+                  /* AK8963 doesn't have the dat read error bit. */
+                  if (!(tmp[0] & AKM_dat_READY) || (tmp[0] & AKM_dat_OVERRUN))
+                      return -2;
+                  if (tmp[7] & AKM_OVERFLOW)
+                      return -3;
+              #endif
+                  dat[0] = (tmp[2] << 8) | tmp[1];
+                  dat[1] = (tmp[4] << 8) | tmp[3];
+                  dat[2] = (tmp[6] << 8) | tmp[5];
+              
+                  dat[0] = ((long)dat[0] * st.chip_cfg.mag_sens_adj[0]) >> 8;
+                  dat[1] = ((long)dat[1] * st.chip_cfg.mag_sens_adj[1]) >> 8;
+                  dat[2] = ((long)dat[2] * st.chip_cfg.mag_sens_adj[2]) >> 8;
+              
+                  if (timestamp)
+                      get_ms(timestamp);
+                  return 0;
+              #else
+2584   1          return -1;
+2585   1      #endif
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 43  
+
+2586   1      }
+2587          
+2588          /**
+2589           *  @brief      Get the compass full-scale range.
+2590           *  @param[out] fsr Current full-scale range.
+2591           *  @return     0 if successful.
+2592           */
+2593          int mpu_get_compass_fsr(unsigned short *fsr)
+2594          {
+2595   1      #ifdef AK89xx_SECONDARY
+                  fsr[0] = st.hw->compass_fsr;
+                  return 0;
+              #else
+2599   1          return -1;
+2600   1      #endif
+2601   1      }
+2602          
+2603          /**
+2604           *  @brief      Enters LP accel motion interrupt mode.
+2605           *  The behavior of this feature is very different between the MPU6050 and the
+2606           *  MPU6500. Each chip's version of this feature is explained below.
+2607           *
+2608           *  \n MPU6050:
+2609           *  \n When this mode is first enabled, the hardware captures a single accel
+2610           *  sample, and subsequent samples are compared with this one to determine if
+2611           *  the device is in motion. Therefore, whenever this "locked" sample needs to
+2612           *  be changed, this function must be called again.
+2613           *
+2614           *  \n The hardware motion threshold can be between 32mg and 8160mg in 32mg
+2615           *  increments.
+2616           *
+2617           *  \n Low-power accel mode supports the following frequencies:
+2618           *  \n 1.25Hz, 5Hz, 20Hz, 40Hz
+2619           *
+2620           *  \n MPU6500:
+2621           *  \n Unlike the MPU6050 version, the hardware does not "lock in" a reference
+2622           *  sample. The hardware monitors the accel dat and detects any large change
+2623           *  over a short period of time.
+2624           *
+2625           *  \n The hardware motion threshold can be between 4mg and 1020mg in 4mg
+2626           *  increments.
+2627           *
+2628           *  \n MPU6500 Low-power accel mode supports the following frequencies:
+2629           *  \n 1.25Hz, 2.5Hz, 5Hz, 10Hz, 20Hz, 40Hz, 80Hz, 160Hz, 320Hz, 640Hz
+2630           *
+2631           *  \n\n NOTES:
+2632           *  \n The driver will round down @e thresh to the nearest supported value if
+2633           *  an unsupported threshold is selected.
+2634           *  \n To select a fractional wake-up frequency, round down the value passed to
+2635           *  @e lpa_freq.
+2636           *  \n The MPU6500 does not support a delay parameter. If this function is used
+2637           *  for the MPU6500, the value passed to @e time will be ignored.
+2638           *  \n To disable this mode, set @e lpa_freq to zero. The driver will restore
+2639           *  the previous configuration.
+2640           *
+2641           *  @param[in]  thresh      Motion threshold in mg.
+2642           *  @param[in]  time        Duration in milliseconds that the accel dat must
+2643           *                          exceed @e thresh before motion is reported.
+2644           *  @param[in]  lpa_freq    Minimum sampling rate, or zero to disable.
+2645           *  @return     0 if successful.
+2646           */
+2647          int mpu_lp_motion_interrupt(unsigned short thresh, unsigned char time,
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 44  
+
+2648              unsigned char lpa_freq)
+2649          {
+2650   1          unsigned char dat[3];
+2651   1      
+2652   1          if (lpa_freq) {
+2653   2              unsigned char thresh_hw;
+2654   2      
+2655   2      #if defined MPU6050
+2656   2              /* TODO: Make these const/#defines. */
+2657   2              /* 1LSb = 32mg. */
+2658   2              if (thresh > 8160)
+2659   2                  thresh_hw = 255;
+2660   2              else if (thresh < 32)
+2661   2                  thresh_hw = 1;
+2662   2              else
+2663   2                  thresh_hw = thresh >> 5;
+2664   2      #elif defined MPU6500
+                      /* 1LSb = 4mg. */
+                      if (thresh > 1020)
+                          thresh_hw = 255;
+                      else if (thresh < 4)
+                          thresh_hw = 1;
+                      else
+                          thresh_hw = thresh >> 2;
+              #endif
+2673   2      
+2674   2              if (!time)
+2675   2                  /* Minimum duration must be 1ms. */
+2676   2                  time = 1;
+2677   2      
+2678   2      #if defined MPU6050
+2679   2              if (lpa_freq > 40)
+2680   2      #elif defined MPU6500
+                      if (lpa_freq > 640)
+              #endif
+2683   2                  /* At this point, the chip has not been re-configured, so the
+2684   2                   * function can safely exit.
+2685   2                   */
+2686   2                  return -1;
+2687   2      
+2688   2              if (!st.chip_cfg.int_motion_only) {
+2689   3                  /* Store current settings for later. */
+2690   3                  if (st.chip_cfg.dmp_on) {
+2691   4                      mpu_set_dmp_state(0);
+2692   4                      st.chip_cfg.cache.dmp_on = 1;
+2693   4                  } else
+2694   3                      st.chip_cfg.cache.dmp_on = 0;
+2695   3                  mpu_get_gyro_fsr(&st.chip_cfg.cache.gyro_fsr);
+2696   3                  mpu_get_accel_fsr(&st.chip_cfg.cache.accel_fsr);
+2697   3                  mpu_get_lpf(&st.chip_cfg.cache.lpf);
+2698   3                  mpu_get_sample_rate(&st.chip_cfg.cache.sample_rate);
+2699   3                  st.chip_cfg.cache.sensors_on = st.chip_cfg.sensors;
+2700   3                  mpu_get_fifo_config(&st.chip_cfg.cache.fifo_sensors);
+2701   3              }
+2702   2      
+2703   2      #ifdef MPU6050
+2704   2              /* Disable hardware interrupts for now. */
+2705   2              set_int_enable(0);
+2706   2      
+2707   2              /* Enter full-power accel-only mode. */
+2708   2              mpu_lp_accel_mode(0);
+2709   2      
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 45  
+
+2710   2              /* Override current LPF (and HPF) settings to obtain a valid accel
+2711   2               * reading.
+2712   2               */
+2713   2              dat[0] = INV_FILTER_256HZ_NOLPF2;
+2714   2              if (i2c_write(st.hw->addr, st.reg->lpf, 1, dat))
+2715   2                  return -1;
+2716   2      
+2717   2              /* NOTE: Digital high pass filter should be configured here. Since this
+2718   2               * driver doesn't modify those bits anywhere, they should already be
+2719   2               * cleared by default.
+2720   2               */
+2721   2      
+2722   2              /* Configure the device to send motion interrupts. */
+2723   2              /* Enable motion interrupt. */
+2724   2              dat[0] = BIT_MOT_INT_EN;
+2725   2              if (i2c_write(st.hw->addr, st.reg->int_enable, 1, dat))
+2726   2                  goto lp_int_restore;
+2727   2      
+2728   2              /* Set motion interrupt parameters. */
+2729   2              dat[0] = thresh_hw;
+2730   2              dat[1] = time;
+2731   2              if (i2c_write(st.hw->addr, st.reg->motion_thr, 2, dat))
+2732   2                  goto lp_int_restore;
+2733   2      
+2734   2              /* Force hardware to "lock" current accel sample. */
+2735   2              delay_ms(5);
+2736   2              dat[0] = (st.chip_cfg.accel_fsr << 3) | BITS_HPF;
+2737   2              if (i2c_write(st.hw->addr, st.reg->accel_cfg, 1, dat))
+2738   2                  goto lp_int_restore;
+2739   2      
+2740   2              /* Set up LP accel mode. */
+2741   2              dat[0] = BIT_LPA_CYCLE;
+2742   2              if (lpa_freq == 1)
+2743   2                  dat[1] = INV_LPA_1_25HZ;
+2744   2              else if (lpa_freq <= 5)
+2745   2                  dat[1] = INV_LPA_5HZ;
+2746   2              else if (lpa_freq <= 20)
+2747   2                  dat[1] = INV_LPA_20HZ;
+2748   2              else
+2749   2                  dat[1] = INV_LPA_40HZ;
+2750   2              dat[1] = (dat[1] << 6) | BIT_STBY_XYZG;
+2751   2              if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_1, 2, dat))
+2752   2                  goto lp_int_restore;
+2753   2      
+2754   2              st.chip_cfg.int_motion_only = 1;
+2755   2              return 0;
+2756   2      #elif defined MPU6500
+                      /* Disable hardware interrupts. */
+                      set_int_enable(0);
+              
+                      /* Enter full-power accel-only mode, no FIFO/DMP. */
+                      dat[0] = 0;
+                      dat[1] = 0;
+                      dat[2] = BIT_STBY_XYZG;
+                      if (i2c_write(st.hw->addr, st.reg->user_ctrl, 3, dat))
+                          goto lp_int_restore;
+              
+                      /* Set motion threshold. */
+                      dat[0] = thresh_hw;
+                      if (i2c_write(st.hw->addr, st.reg->motion_thr, 1, dat))
+                          goto lp_int_restore;
+              
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 46  
+
+                      /* Set wake frequency. */
+                      if (lpa_freq == 1)
+                          dat[0] = INV_LPA_1_25HZ;
+                      else if (lpa_freq == 2)
+                          dat[0] = INV_LPA_2_5HZ;
+                      else if (lpa_freq <= 5)
+                          dat[0] = INV_LPA_5HZ;
+                      else if (lpa_freq <= 10)
+                          dat[0] = INV_LPA_10HZ;
+                      else if (lpa_freq <= 20)
+                          dat[0] = INV_LPA_20HZ;
+                      else if (lpa_freq <= 40)
+                          dat[0] = INV_LPA_40HZ;
+                      else if (lpa_freq <= 80)
+                          dat[0] = INV_LPA_80HZ;
+                      else if (lpa_freq <= 160)
+                          dat[0] = INV_LPA_160HZ;
+                      else if (lpa_freq <= 320)
+                          dat[0] = INV_LPA_320HZ;
+                      else
+                          dat[0] = INV_LPA_640HZ;
+                      if (i2c_write(st.hw->addr, st.reg->lp_accel_odr, 1, dat))
+                          goto lp_int_restore;
+              
+                      /* Enable motion interrupt (MPU6500 version). */
+                      dat[0] = BITS_WOM_EN;
+                      if (i2c_write(st.hw->addr, st.reg->accel_intel, 1, dat))
+                          goto lp_int_restore;
+              
+                      /* Enable cycle mode. */
+                      dat[0] = BIT_LPA_CYCLE;
+                      if (i2c_write(st.hw->addr, st.reg->pwr_mgmt_1, 1, dat))
+                          goto lp_int_restore;
+              
+                      /* Enable interrupt. */
+                      dat[0] = BIT_MOT_INT_EN;
+                      if (i2c_write(st.hw->addr, st.reg->int_enable, 1, dat))
+                          goto lp_int_restore;
+              
+                      st.chip_cfg.int_motion_only = 1;
+                      return 0;
+              #endif
+2814   2          } else {
+2815   2              /* Don't "restore" the previous state if no state has been saved. */
+2816   2              int ii;
+2817   2              char *cache_ptr = (char*)&st.chip_cfg.cache;
+2818   2              for (ii = 0; ii < sizeof(st.chip_cfg.cache); ii++) {
+2819   3                  if (cache_ptr[ii] != 0)
+2820   3                      goto lp_int_restore;
+2821   3              }
+2822   2              /* If we reach this point, motion interrupt mode hasn't been used yet. */
+2823   2              return -1;
+2824   2          }
+2825   1      lp_int_restore:
+2826   1          /* Set to invalid values to ensure no I2C writes are skipped. */
+2827   1          st.chip_cfg.gyro_fsr = 0xFF;
+2828   1          st.chip_cfg.accel_fsr = 0xFF;
+2829   1          st.chip_cfg.lpf = 0xFF;
+2830   1          st.chip_cfg.sample_rate = 0xFFFF;
+2831   1          st.chip_cfg.sensors = 0xFF;
+2832   1          st.chip_cfg.fifo_enable = 0xFF;
+2833   1          st.chip_cfg.clk_src = INV_CLK_PLL;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 47  
+
+2834   1          mpu_set_sensors(st.chip_cfg.cache.sensors_on);
+2835   1          mpu_set_gyro_fsr(st.chip_cfg.cache.gyro_fsr);
+2836   1          mpu_set_accel_fsr(st.chip_cfg.cache.accel_fsr);
+2837   1          mpu_set_lpf(st.chip_cfg.cache.lpf);
+2838   1          mpu_set_sample_rate(st.chip_cfg.cache.sample_rate);
+2839   1          mpu_configure_fifo(st.chip_cfg.cache.fifo_sensors);
+2840   1      
+2841   1          if (st.chip_cfg.cache.dmp_on)
+2842   1              mpu_set_dmp_state(1);
+2843   1      
+2844   1      #ifdef MPU6500
+                  /* Disable motion interrupt (MPU6500 version). */
+                  dat[0] = 0;
+                  if (i2c_write(st.hw->addr, st.reg->accel_intel, 1, dat))
+                      goto lp_int_restore;
+              #endif
+2850   1      
+2851   1          st.chip_cfg.int_motion_only = 0;
+2852   1          return 0;
+2853   1      }
+2854          //////////////////////////////////////////////////////////////////////////////////
+2855          //添加的代码部分 
+2856          //////////////////////////////////////////////////////////////////////////////////   
+2857          //本程序只供学习使用，未经作者许可，不得用于其它任何用途
+2858          //ALIENTEK战舰STM32开发板V3
+2859          //MPU6050 DMP 驱动代码     
+2860          //正点原子@ALIENTEK
+2861          //技术论坛:www.openedv.com
+2862          //创建日期:2015/1/17
+2863          //版本：V1.0
+2864          //版权所有，盗版必究。
+2865          //Copyright(C) 广州市星翼电子科技有限公司 2009-2019
+2866          //All rights reserved                   
+2867          ////////////////////////////////////////////////////////////////////////////////// 
+2868          
+2869          //q30格式,long转float时的除数.
+2870          #define q30  1073741824.0f
+2871          
+2872          //陀螺仪方向设置
+2873          static signed char gyro_orientation[9] = { 1, 0, 0,
+2874                                                     0, 1, 0,
+2875                                                     0, 0, 1};
+2876          //MPU6050自测试
+2877          //返回值:0,正常
+2878          //    其他,失败
+2879          u8 run_self_test(void)
+2880          {
+2881   1        int result;
+2882   1        //char test_packet[4] = {0};
+2883   1        long gyro[3], accel[3]; 
+2884   1        result = mpu_run_self_test(gyro, accel);
+2885   1        if (result == 0x3) 
+2886   1        {
+2887   2          /* Test passed. We can trust the gyro dat here, so let's push it down
+2888   2          * to the DMP.
+2889   2          */
+2890   2          float sens;
+2891   2          unsigned short accel_sens;
+2892   2          mpu_get_gyro_sens(&sens);
+2893   2          gyro[0] = (long)(gyro[0] * sens);
+2894   2          gyro[1] = (long)(gyro[1] * sens);
+2895   2          gyro[2] = (long)(gyro[2] * sens);
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 48  
+
+2896   2          dmp_set_gyro_bias(gyro);
+2897   2          mpu_get_accel_sens(&accel_sens);
+2898   2          accel[0] *= accel_sens;
+2899   2          accel[1] *= accel_sens;
+2900   2          accel[2] *= accel_sens;
+2901   2          dmp_set_accel_bias(accel);
+2902   2          return 0;
+2903   2        }else return 1;
+2904   1      }
+2905          //陀螺仪方向控制
+2906          unsigned short inv_orientation_matrix_to_scalar(
+2907              const signed char *mtx)
+2908          {
+2909   1          unsigned short scalar; 
+2910   1          /*
+2911   1             XYZ  010_001_000 Identity Matrix
+2912   1             XZY  001_010_000
+2913   1             YXZ  010_000_001
+2914   1             YZX  000_010_001
+2915   1             ZXY  001_000_010
+2916   1             ZYX  000_001_010
+2917   1           */
+2918   1      
+2919   1          scalar = inv_row_2_scale(mtx);
+2920   1          scalar |= inv_row_2_scale(mtx + 3) << 3;
+2921   1          scalar |= inv_row_2_scale(mtx + 6) << 6;
+2922   1      
+2923   1      
+2924   1          return scalar;
+2925   1      }
+2926          //方向转换
+2927          unsigned short inv_row_2_scale(const signed char *row)
+2928          {
+2929   1          unsigned short b;
+2930   1      
+2931   1          if (row[0] > 0)
+2932   1              b = 0;
+2933   1          else if (row[0] < 0)
+2934   1              b = 4;
+2935   1          else if (row[1] > 0)
+2936   1              b = 1;
+2937   1          else if (row[1] < 0)
+2938   1              b = 5;
+2939   1          else if (row[2] > 0)
+2940   1              b = 2;
+2941   1          else if (row[2] < 0)
+2942   1              b = 6;
+2943   1          else
+2944   1              b = 7;      // error
+2945   1          return b;
+2946   1      }
+2947          //空函数,未用到.
+2948          void mget_ms(unsigned long *time)
+2949          {
+2950   1      
+2951   1      }
+2952          //mpu6050,dmp初始化
+2953          //返回值:0,正常
+2954          //    其他,失败
+2955          u8 mpu_dmp_init(void)
+2956          {
+2957   1        u8 res=0;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 49  
+
+2958   1        MPU_IIC_Init();   //初始化IIC总线
+2959   1        if(mpu_init()==0) //初始化MPU6050
+2960   1        {  
+2961   2          res=mpu_set_sensors(INV_XYZ_GYRO|INV_XYZ_ACCEL);//设置所需要的传感器
+2962   2          if(res)return 1; 
+2963   2          res=mpu_configure_fifo(INV_XYZ_GYRO|INV_XYZ_ACCEL);//设置FIFO
+2964   2          if(res)return 2; 
+2965   2          res=mpu_set_sample_rate(DEFAULT_MPU_HZ);  //设置采样率
+2966   2          if(res)return 3; 
+2967   2          res=dmp_load_motion_driver_firmware();    //加载dmp固件
+2968   2          if(res)return 4; 
+2969   2          res=dmp_set_orientation(inv_orientation_matrix_to_scalar(gyro_orientation));//设置陀螺仪方向
+2970   2          if(res)return 5; 
+2971   2          res=dmp_enable_feature(DMP_FEATURE_6X_LP_QUAT|DMP_FEATURE_TAP|  //设置dmp功能
+2972   2              DMP_FEATURE_ANDROID_ORIENT|DMP_FEATURE_SEND_RAW_ACCEL|DMP_FEATURE_SEND_CAL_GYRO|
+2973   2              DMP_FEATURE_GYRO_CAL);
+2974   2          if(res)return 6; 
+2975   2          res=dmp_set_fifo_rate(DEFAULT_MPU_HZ);  //设置DMP输出速率(最大不超过200Hz)
+2976   2          if(res)return 7;   
+2977   2          res=run_self_test();    //自检
+2978   2          if(res)return 8;    
+2979   2          res=mpu_set_dmp_state(1); //使能DMP
+2980   2          if(res)return 9;     
+2981   2        }else return 10;
+2982   1        return 0;
+2983   1      }
+2984          //得到dmp处理后的数据(注意,本函数需要比较多堆栈,局部变量有点多)
+2985          //pitch:俯仰角 精度:0.1°   范围:-90.0° <---> +90.0°
+2986          //roll:横滚角  精度:0.1°   范围:-180.0°<---> +180.0°
+2987          //yaw:航向角   精度:0.1°   范围:-180.0°<---> +180.0°
+2988          //返回值:0,正常
+2989          //    其他,失败
+2990          u8 mpu_dmp_get_dat(float *pitch,float *roll,float *yaw)
+2991          {
+2992   1        float q0=1.0f,q1=0.0f,q2=0.0f,q3=0.0f;
+2993   1        unsigned long sensor_timestamp;
+2994   1        short gyro[3], accel[3], sensors;
+2995   1        unsigned char more;
+2996   1        long quat[4]; 
+2997   1        if(dmp_read_fifo(gyro, accel, quat, &sensor_timestamp, &sensors,&more))return 1;   
+2998   1        /* Gyro and accel dat are written to the FIFO by the DMP in chip frame and hardware units.
+2999   1         * This behavior is convenient because it keeps the gyro and accel outputs of dmp_read_fifo and mpu_read_
+             -fifo consistent.
+3000   1        **/
+3001   1        /*if (sensors & INV_XYZ_GYRO )
+3002   1        send_packet(PACKET_TYPE_GYRO, gyro);
+3003   1        if (sensors & INV_XYZ_ACCEL)
+3004   1        send_packet(PACKET_TYPE_ACCEL, accel); */
+3005   1        /* Unlike gyro and accel, quaternions are written to the FIFO in the body frame, q30.
+3006   1         * The orientation is set by the scalar passed to dmp_set_orientation during initialization. 
+3007   1        **/
+3008   1        if(sensors&INV_WXYZ_QUAT) 
+3009   1        {
+3010   2          q0 = quat[0] / q30; //q30格式转换为浮点数
+3011   2          q1 = quat[1] / q30;
+3012   2          q2 = quat[2] / q30;
+3013   2          q3 = quat[3] / q30; 
+3014   2          //计算得到俯仰角/横滚角/航向角
+3015   2          *pitch = asin(-2 * q1 * q3 + 2 * q0* q2)* 57.3; // pitch
+3016   2          *roll  = atan2(2 * q2 * q3 + 2 * q0 * q1, -2 * q1 * q1 - 2 * q2* q2 + 1)* 57.3; // roll
+3017   2          *yaw   = atan2(2*(q1*q2 + q0*q3),q0*q0+q1*q1-q2*q2-q3*q3) * 57.3; //yaw
+3018   2        }else return 2;
+C51 COMPILER V9.57.0.0   INV_MPU                                                           07/20/2020 01:26:07 PAGE 50  
+
+3019   1        return 0;
+3020   1      }
+3021          
+3022          
+3023          
+3024          
+3025          
+3026          
+3027          
+3028          
+3029          
+3030          
+3031          
+3032          
+3033          
+3034          
+3035          
+3036          
+3037          
+3038          
+3039          
+3040          
+3041          
+3042          
+
+C51 COMPILATION COMPLETE.  3 WARNING(S),  8 ERROR(S)
