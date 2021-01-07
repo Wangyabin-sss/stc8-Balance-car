@@ -36,7 +36,7 @@ void OLED_Set_Pos(u8 x, u8 y)
 	OLED_WR_Byte((x&0x0f)|0x01,OLED_CMD); 
 }   
 
-//清屏函数,清完屏,整个屏幕是黑色的!和没点亮一样!!!	  
+//清屏函数,清完屏,整个屏幕是黑色的!和没点亮一样!!  
 void OLED_Clear(void)  
 {  
 	u8 i,n;		    
